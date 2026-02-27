@@ -2002,27 +2002,7 @@ function timelineTicks(startIso, endIso, zoom){
   return out;
 }
 
-function applyTimelineFocus(){
-  const viewport = document.getElementById('timelineViewport');
-  const timelineRoot = document.getElementById('timelineRoot');
-  const focus = document.getElementById('timelineFocus')?.value || 'today';
-  if(!viewport || !timelineRoot) return;
-  const pxPerDay = Number(timelineRoot.dataset.pxPerDay || 6);
-  const startIso = timelineRoot.dataset.start || '';
-  if(!startIso) return;
-
-  let targetIso = startIso;
-  if(focus === 'today') targetIso = new Date().toISOString().slice(0,10);
-  else if(focus === 'p1') targetIso = _addDaysIso(new Date().toISOString().slice(0,10), 30);
-  else if(focus === 'p3') targetIso = _addDaysIso(new Date().toISOString().slice(0,10), 90);
-  else if(focus === 'p6') targetIso = _addDaysIso(new Date().toISOString().slice(0,10), 180);
-  else if(focus === 'end') targetIso = timelineRoot.dataset.end || startIso;
-
-  const start = new Date(startIso + 'T00:00:00');
-  const target = new Date(targetIso + 'T00:00:00');
-  const days = Math.max(0, Math.floor((target - start) / 86400000));
-  viewport.scrollLeft = Math.max(0, days * pxPerDay - 80);
-}
+function applyTimelineFocus(){}
 
 function renderTimeline(data){
   const timelineEl = document.getElementById('timeline');
@@ -2053,12 +2033,13 @@ function renderTimeline(data){
   const rowsHtml = timeline.map(it => {
     const left = Math.max(0, Number(it.offset_days || 0) * pxPerDay);
     const width = Math.max(8, Number(it.duration_days || 1) * pxPerDay);
-    const label = `${it.start_txt || ''} → ${it.end_txt || ''}`;
+    const perimeter = it.perimeter || it.area || 'Périmètre';
+    const tip = it.title || perimeter;
+    const cls = it.package_color || 'pkg-default';
     return `
       <div class="gRow">
-        <div class="gLabel" title="${it.title || ''}">${it.title || '(Sans titre)'} <span class="small">• ${it.area || 'Général'} • ${it.package || 'Sans lot'} • ${it.company || 'Non renseigné'}</span></div>
         <div class="gTrack" style="width:${totalWidth}px">
-          <div class="gBar ${it.status || 'a_suivre'}" style="left:${left}px;width:${width}px" title="${label}">${label}</div>
+          <div class="gBar ${cls}" style="left:${left}px;width:${width}px" title="${tip}">${perimeter}</div>
         </div>
       </div>`;
   }).join('');
@@ -2066,13 +2047,10 @@ function renderTimeline(data){
   timelineEl.innerHTML = `
     <div class="gViewport" id="timelineViewport">
       <div class="gTop" id="timelineRoot" data-start="${startIso}" data-end="${endIso}" data-px-per-day="${pxPerDay}">
-        <div class="gTopLeft">Sujet / périmètre</div>
         <div class="gTopRight" style="width:${totalWidth}px"><div class="gTicks">${ticksHtml}</div></div>
       </div>
       <div class="gBody">${rowsHtml}</div>
     </div>`;
-
-  applyTimelineFocus();
 }
 
 async function refreshDashboard(){
@@ -2142,21 +2120,24 @@ select{{width:100%;padding:12px 12px;border-radius:12px;border:1px solid var(--b
 .b-rappel{{background:#fee2e2;color:var(--late)}}
 .b-suivre{{background:#ffedd5;color:var(--warn)}}
 .b-clos{{background:#dcfce7;color:var(--ok)}}
+.timelineFilters{{display:flex;gap:8px;flex-wrap:wrap}}
+.timelineFilters select{{width:auto;min-width:180px;padding:8px 10px}}
 .gantt{{border:1px solid var(--border);border-radius:12px;background:#fff;padding:10px;overflow:hidden}}
 .gViewport{{overflow:auto;border:1px solid var(--border);border-radius:10px}}
-.gTop{{display:grid;grid-template-columns:320px 1fr;min-width:max-content;position:sticky;top:0;z-index:2;background:#fff}}
-.gTopLeft{{padding:8px 10px;font-size:12px;font-weight:900;border-right:1px solid var(--border)}}
+.gTop{{min-width:max-content;position:sticky;top:0;z-index:2;background:#fff}}
 .gTopRight{{position:relative;height:34px;border-bottom:1px solid var(--border);background:#f8fafc}}
 .gTicks{{position:relative;height:100%}}
 .gTick{{position:absolute;top:0;bottom:0;border-left:1px solid #cbd5e1;font-size:10px;font-weight:900;color:#334155;padding-left:4px;display:flex;align-items:center;white-space:nowrap;background:rgba(248,250,252,.65)}}
 .gBody{{min-width:max-content}}
-.gRow{{display:grid;grid-template-columns:320px 1fr;min-width:max-content}}
-.gLabel{{padding:6px 10px;font-size:12px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-right:1px solid #e2e8f0;border-bottom:1px solid #f1f5f9;background:#fff;position:sticky;left:0;z-index:1}}
-.gTrack{{position:relative;height:30px;border-bottom:1px solid #f1f5f9;background:repeating-linear-gradient(to right,#fff,#fff 47px,#f8fafc 47px,#f8fafc 48px)}}
-.gBar{{position:absolute;height:20px;top:4px;border-radius:6px;padding:1px 8px;font-size:11px;font-weight:900;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;border:1px solid rgba(15,23,42,.25)}}
-.gBar.rappel{{background:#fecaca;color:#7f1d1d}}
-.gBar.a_suivre{{background:#fed7aa;color:#7c2d12}}
-.gBar.clos{{background:#bbf7d0;color:#14532d}}
+.gRow{{min-width:max-content}}
+.gTrack{{position:relative;height:32px;border-bottom:1px solid #f1f5f9;background:repeating-linear-gradient(to right,#fff,#fff 47px,#f8fafc 47px,#f8fafc 48px)}}
+.gBar{{position:absolute;height:22px;top:4px;border-radius:6px;padding:1px 8px;font-size:11px;font-weight:900;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;border:1px solid rgba(15,23,42,.28);color:#0b1220}}
+.gBar.pkg-cvc{{background:#22d3ee}}
+.gBar.pkg-plb{{background:#ff00cc;color:#fff}}
+.gBar.pkg-ele{{background:#22c55e;color:#052e16}}
+.gBar.pkg-goe{{background:#7f1d1d;color:#fff}}
+.gBar.pkg-syn{{background:#f59e0b;color:#111827}}
+.gBar.pkg-default{{background:#cbd5e1}}
 .small{{font-size:12px;color:var(--muted);font-weight:700}}
 .empty{{color:var(--muted);font-style:italic}}
 </style>
@@ -2209,26 +2190,18 @@ select{{width:100%;padding:12px 12px;border-radius:12px;border:1px solid var(--b
     <div class="card">
       <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap">
         <div style="font-weight:1000">Calendrier / frise chronologique des rendus</div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <div class="timelineFilters">
           <select id="filterArea" onchange="refreshDashboard()"><option value="">Toutes les zones</option></select>
           <select id="filterPackage" onchange="refreshDashboard()"><option value="">Tous les lots</option></select>
           <select id="filterStatus" onchange="refreshDashboard()">
-            <option value="open" selected>Sujets ouverts (rappels + à suivre)</option>
+            <option value="open" selected>Sujets ouverts</option>
             <option value="reminders">Rappels uniquement</option>
-            <option value="all">Tous (ouverts + clos)</option>
+            <option value="all">Tous</option>
           </select>
           <select id="timelineZoom" onchange="renderTimeline(window.__homeDashboardData || null)">
             <option value="month">Zoom mois</option>
             <option value="week" selected>Zoom semaine</option>
             <option value="day">Zoom jour</option>
-          </select>
-          <select id="timelineFocus" onchange="applyTimelineFocus()">
-            <option value="start">Vue début</option>
-            <option value="today" selected>Aujourd'hui</option>
-            <option value="p1">+1 mois</option>
-            <option value="p3">+3 mois</option>
-            <option value="p6">+6 mois</option>
-            <option value="end">Vue fin</option>
           </select>
         </div>
       </div>
@@ -3585,6 +3558,31 @@ def api_quality(
         return JSONResponse({"error": str(ex)}, status_code=500)
 
 
+def _timeline_package_color(package_label: str) -> str:
+    raw = (package_label or "").strip().lower()
+    if not raw:
+        return "pkg-default"
+    if "cvc" in raw:
+        return "pkg-cvc"
+    if "plb" in raw or "plomberie" in raw:
+        return "pkg-plb"
+    if (
+        "ele" in raw
+        or "élec" in raw
+        or "electric" in raw
+        or "cfa/cfo" in raw
+        or "cfa et cfo" in raw
+        or re.search(r"\bcfa\b", raw)
+        or re.search(r"\bcfo\b", raw)
+    ):
+        return "pkg-ele"
+    if "goe" in raw or "gros oeuvre" in raw or "gros œuvre" in raw or "structure" in raw or re.search(r"\bstr\b", raw):
+        return "pkg-goe"
+    if "synth" in raw:
+        return "pkg-syn"
+    return "pkg-default"
+
+
 def _build_ai_summary_by_area(df: pd.DataFrame, ref_date: date) -> Dict[str, str]:
     if df.empty:
         return {}
@@ -3692,6 +3690,8 @@ def api_home_meeting_dashboard(
                     status = "rappel"
                 elif is_open:
                     status = "a_suivre"
+                area_label = str(r.get("__area_list__", "Général"))
+                package_label = str(r.get("__package_list__", "Sans lot"))
                 timeline.append({
                     "title": str(r.get(E_COL_TITLE, "") or "").strip(),
                     "start": d_start.isoformat(),
@@ -3700,8 +3700,10 @@ def api_home_meeting_dashboard(
                     "end_txt": _fmt_date(d_end),
                     "offset_days": int((d_start - min_start).days),
                     "duration_days": int(max(1, (d_end - d_start).days + 1)),
-                    "area": str(r.get("__area_list__", "Général")),
-                    "package": str(r.get("__package_list__", "Sans lot")),
+                    "area": area_label,
+                    "package": package_label,
+                    "perimeter": area_label,
+                    "package_color": _timeline_package_color(package_label),
                     "company": str(r.get("__company__", "Non renseigné")),
                     "status": status,
                 })
