@@ -1,0 +1,154 @@
+:root {
+  color-scheme: light;
+  font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  --bg: #f5f7fb;
+  --panel: #ffffff;
+  --text: #1d2635;
+  --muted: #647086;
+  --line: #d8e0ee;
+  --primary: #3269f7;
+  --chip: #eef3ff;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.layout {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 2rem 1rem 3rem;
+  display: grid;
+  gap: 1rem;
+}
+
+header h1 {
+  margin: 0;
+  font-size: 1.8rem;
+}
+
+header p {
+  margin-top: 0.6rem;
+  color: var(--muted);
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 1rem;
+}
+
+.controls {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.8rem;
+  align-items: end;
+}
+
+.controls label {
+  font-size: 0.88rem;
+  color: var(--muted);
+}
+
+select {
+  width: 100%;
+  margin-top: 0.35rem;
+  padding: 0.55rem 0.6rem;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: #fff;
+}
+
+.kpi-grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+.kpi-card h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+}
+
+.value {
+  margin: 0;
+  font-size: 2.3rem;
+  font-weight: 700;
+  color: var(--primary);
+}
+
+.metric-list {
+  margin: 0;
+  padding-left: 1.1rem;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.calendar-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin-bottom: 0.8rem;
+}
+
+.calendar-header h2 {
+  margin: 0;
+}
+
+#calendar-summary {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.calendar {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.calendar-item {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0.8rem;
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.calendar-item strong {
+  display: block;
+  margin-bottom: 0.2rem;
+}
+
+.calendar-meta {
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.calendar-chips {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.chip {
+  background: var(--chip);
+  color: var(--primary);
+  border-radius: 999px;
+  padding: 0.18rem 0.6rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.empty {
+  color: var(--muted);
+  font-style: italic;
+}
