@@ -1973,18 +1973,25 @@ function _addDaysIso(iso, days){
   return d.toISOString().slice(0,10);
 }
 
-function timelineTicks(startIso, endIso, zoom){
+function timelineTicks(startIso, endIso, zoomMode){
   const out = [];
   if(!startIso || !endIso) return out;
   let cur = new Date(startIso + "T00:00:00");
   const end = new Date(endIso + "T00:00:00");
-  if(zoom === 'month'){
+
+  if(zoomMode === 'year'){
+    cur = new Date(cur.getFullYear(), 0, 1);
+    while(cur <= end){
+      out.push({ iso: cur.toISOString().slice(0,10), label: String(cur.getFullYear()) });
+      cur = new Date(cur.getFullYear()+1, 0, 1);
+    }
+  } else if(zoomMode === 'month'){
     cur = new Date(cur.getFullYear(), cur.getMonth(), 1);
     while(cur <= end){
       out.push({ iso: cur.toISOString().slice(0,10), label: cur.toLocaleDateString('fr-FR',{month:'short',year:'2-digit'}) });
       cur = new Date(cur.getFullYear(), cur.getMonth()+1, 1);
     }
-  } else if(zoom === 'week'){
+  } else if(zoomMode === 'week'){
     const day = cur.getDay();
     const diff = (day === 0 ? -6 : 1 - day);
     cur.setDate(cur.getDate() + diff);
@@ -2004,6 +2011,39 @@ function timelineTicks(startIso, endIso, zoom){
 
 function applyTimelineFocus(){}
 
+function getZoomLevel(){
+  const el = document.getElementById('timelineScale');
+  return Math.max(0, Math.min(3, Number(el?.value || 1)));
+}
+
+function zoomModeLabel(level){
+  return ['année','mois','semaine','jour'][level] || 'semaine';
+}
+
+function zoomPxPerDay(level){
+  return [0.22, 2, 7, 22][level] || 7;
+}
+
+function syncZoomLabel(){
+  const level = getZoomLevel();
+  const label = document.getElementById('timelineScaleLabel');
+  if(label){ label.textContent = `Échelle: ${zoomModeLabel(level)}`; }
+}
+
+function bumpZoom(delta){
+  const el = document.getElementById('timelineScale');
+  if(!el) return;
+  const next = Math.max(0, Math.min(3, Number(el.value || 1) + delta));
+  el.value = String(next);
+  syncZoomLabel();
+  renderTimeline(window.__homeDashboardData || null);
+}
+
+function onScaleChange(){
+  syncZoomLabel();
+  renderTimeline(window.__homeDashboardData || null);
+}
+
 function renderTimeline(data){
   const timelineEl = document.getElementById('timeline');
   if(!timelineEl) return;
@@ -2012,15 +2052,15 @@ function renderTimeline(data){
     timelineEl.innerHTML = '<div class="empty">Aucun rendu daté selon les filtres.</div>';
     return;
   }
-  const zoom = document.getElementById('timelineZoom')?.value || 'week';
-  const pxMap = { month: 2, week: 7, day: 22 };
-  const pxPerDay = pxMap[zoom] || 7;
+  const zoomLevel = getZoomLevel();
+  const zoomMode = ['year','month','week','day'][zoomLevel] || 'week';
+  const pxPerDay = zoomPxPerDay(zoomLevel);
   const cal = data?.calendar || {};
   const startIso = cal.start || timeline[0]?.start || '';
   const endIso = cal.end || timeline[timeline.length-1]?.end || startIso;
   const totalDays = Math.max(1, Number(cal.total_days || 1));
   const totalWidth = Math.max(900, totalDays * pxPerDay);
-  const ticks = timelineTicks(startIso, endIso, zoom);
+  const ticks = timelineTicks(startIso, endIso, zoomMode);
 
   const startDate = new Date(startIso + 'T00:00:00');
   const ticksHtml = ticks.map(t => {
@@ -2036,10 +2076,11 @@ function renderTimeline(data){
     const perimeter = it.perimeter || it.area || 'Périmètre';
     const tip = it.title || perimeter;
     const cls = it.package_color || 'pkg-default';
+    const warn = it.status === 'rappel' ? '<span class="warnBlink">!</span>' : '';
     return `
       <div class="gRow">
         <div class="gTrack" style="width:${totalWidth}px">
-          <div class="gBar ${cls}" style="left:${left}px;width:${width}px" title="${tip}">${perimeter}</div>
+          <div class="gBar ${cls}" style="left:${left}px;width:${width}px" title="${tip}">${warn}${perimeter}</div>
         </div>
       </div>`;
   }).join('');
@@ -2071,6 +2112,7 @@ async function refreshDashboard(){
   document.getElementById('kpiDate').textContent = data.reference_date || '-';
   renderRows('companyBox', data.kpis?.company_cumulative || [], 'name', 'count');
 
+  syncZoomLabel();
   renderTimeline(data);
 
   fillSelect('filterArea', data.filters?.areas || [], area, 'Toutes les zones');
@@ -2121,7 +2163,11 @@ select{{width:100%;padding:12px 12px;border-radius:12px;border:1px solid var(--b
 .b-suivre{{background:#ffedd5;color:var(--warn)}}
 .b-clos{{background:#dcfce7;color:var(--ok)}}
 .timelineFilters{{display:flex;gap:8px;flex-wrap:wrap}}
-.timelineFilters select{{width:auto;min-width:180px;padding:8px 10px}}
+.timelineFilters select{{width:auto;min-width:160px;padding:8px 10px}}
+.timelineZoom{{display:inline-flex;align-items:center;gap:6px;padding:4px 8px;border:1px solid var(--border);border-radius:10px;background:#fff}}
+.timelineZoom button{{border:1px solid var(--border);background:#fff;border-radius:8px;width:26px;height:26px;font-weight:900;cursor:pointer}}
+.timelineZoom input[type=range]{{width:110px}}
+.timelineZoomLabel{{font-size:12px;font-weight:900;color:var(--muted);min-width:100px}}
 .gantt{{border:1px solid var(--border);border-radius:12px;background:#fff;padding:10px;overflow:hidden}}
 .gViewport{{overflow:auto;border:1px solid var(--border);border-radius:10px}}
 .gTop{{min-width:max-content;position:sticky;top:0;z-index:2;background:#fff}}
@@ -2131,7 +2177,9 @@ select{{width:100%;padding:12px 12px;border-radius:12px;border:1px solid var(--b
 .gBody{{min-width:max-content}}
 .gRow{{min-width:max-content}}
 .gTrack{{position:relative;height:32px;border-bottom:1px solid #f1f5f9;background:repeating-linear-gradient(to right,#fff,#fff 47px,#f8fafc 47px,#f8fafc 48px)}}
-.gBar{{position:absolute;height:22px;top:4px;border-radius:6px;padding:1px 8px;font-size:11px;font-weight:900;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;border:1px solid rgba(15,23,42,.28);color:#0b1220}}
+.gBar{{position:absolute;height:22px;top:4px;border-radius:6px;padding:1px 8px;font-size:11px;font-weight:900;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;border:1px solid rgba(15,23,42,.28);color:#0b1220;display:flex;align-items:center;gap:6px}}
+.warnBlink{{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;border-radius:999px;background:#ef4444;color:#fff;font-size:10px;font-weight:1000;animation:blinkWarn 1s steps(2,start) infinite}}
+@keyframes blinkWarn{{to{{visibility:hidden}}}}
 .gBar.pkg-cvc{{background:#22d3ee}}
 .gBar.pkg-plb{{background:#ff00cc;color:#fff}}
 .gBar.pkg-ele{{background:#22c55e;color:#052e16}}
@@ -2198,11 +2246,12 @@ select{{width:100%;padding:12px 12px;border-radius:12px;border:1px solid var(--b
             <option value="reminders">Rappels uniquement</option>
             <option value="all">Tous</option>
           </select>
-          <select id="timelineZoom" onchange="renderTimeline(window.__homeDashboardData || null)">
-            <option value="month">Zoom mois</option>
-            <option value="week" selected>Zoom semaine</option>
-            <option value="day">Zoom jour</option>
-          </select>
+          <div class="timelineZoom">
+            <button type="button" onclick="bumpZoom(-1)">−</button>
+            <input id="timelineScale" type="range" min="0" max="3" step="1" value="2" oninput="onScaleChange()" />
+            <button type="button" onclick="bumpZoom(1)">+</button>
+            <span class="timelineZoomLabel" id="timelineScaleLabel">Échelle: semaine</span>
+          </div>
         </div>
       </div>
       <div id="timeline" class="gantt" style="margin-top:10px"><div class="empty">Aucune donnée.</div></div>
