@@ -273,6 +273,15 @@ def _parse_ids(v) -> List[str]:
     return [p.strip() for p in s.split(",") if p.strip()]
 
 
+def _split_multi_labels(v) -> List[str]:
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return []
+    raw = str(v).strip()
+    if not raw or raw.lower() == "nan":
+        return []
+    return [p.strip() for p in re.split(r"[,;/]+", raw) if p and p.strip()]
+
+
 def _bool_true(v) -> bool:
     if v is None or (isinstance(v, float) and pd.isna(v)):
         return False
@@ -698,10 +707,24 @@ def _explode_areas(df: pd.DataFrame) -> pd.DataFrame:
         df.loc[df["__area__"] == "", "__area__"] = "Général"
     else:
         df["__area__"] = "Général"
-    df["__area_list__"] = df["__area__"].apply(lambda s: [x.strip() for x in s.split(",")] if "," in s else [s])
+    df["__area_list__"] = df["__area__"].apply(_split_multi_labels)
+    df["__area_list__"] = df["__area_list__"].apply(lambda vals: vals if vals else ["Général"])
     df = df.explode("__area_list__")
     df["__area_list__"] = df["__area_list__"].fillna("Général").astype(str).str.strip()
     df.loc[df["__area_list__"] == "", "__area_list__"] = "Général"
+    return df
+
+
+def _explode_packages(df: pd.DataFrame) -> pd.DataFrame:
+    if E_COL_PACKAGES in df.columns:
+        df["__package__"] = df[E_COL_PACKAGES].fillna("").astype(str).str.strip()
+    else:
+        df["__package__"] = ""
+    df["__package_list__"] = df["__package__"].apply(_split_multi_labels)
+    df["__package_list__"] = df["__package_list__"].apply(lambda vals: vals if vals else ["Sans lot"])
+    df = df.explode("__package_list__")
+    df["__package_list__"] = df["__package_list__"].fillna("Sans lot").astype(str).str.strip()
+    df.loc[df["__package_list__"] == "", "__package_list__"] = "Sans lot"
     return df
 
 
@@ -1918,22 +1941,37 @@ def render_home(project: Optional[str] = None, print_mode: bool = False) -> str:
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>TEMPO • CR Synthèse</title>
 <style>
-:root{{--text:#0b1220;--muted:#475569;--border:#e2e8f0;--soft:#f8fafc;--shadow:0 10px 30px rgba(2,6,23,.06);--accent:#0f172a;}}
+:root{{--text:#0b1220;--muted:#475569;--border:#e2e8f0;--soft:#f8fafc;--shadow:0 10px 30px rgba(2,6,23,.06);--accent:#0f172a;--ok:#14532d;--warn:#9a3412;--late:#991b1b;}}
 *{{box-sizing:border-box}}
 body{{margin:0;background:#fff;color:var(--text);font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,Arial;}}
-.wrap{{max-width:1100px;margin:0 auto;padding:26px;}}
+.wrap{{max-width:1200px;margin:0 auto;padding:26px;display:flex;flex-direction:column;gap:14px}}
 .card{{background:#fff;border:1px solid var(--border);border-radius:16px;box-shadow:var(--shadow);padding:16px;}}
 .brandline{{display:flex;gap:16px;align-items:center;margin-bottom:12px}}
 .homeLogo{{height:44px;width:auto;display:block}}
 .homeLogoText{{font-weight:1000;letter-spacing:.18em;font-size:20px}}
 .tag{{color:var(--muted);font-weight:800}}
 .grid{{display:grid;grid-template-columns:1fr 1fr;gap:14px}}
-@media(max-width:780px){{.grid{{grid-template-columns:1fr}}}}
+.grid3{{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}}
+@media(max-width:900px){{.grid,.grid3{{grid-template-columns:1fr}}}}
 label{{display:block;font-weight:900;margin:0 0 6px}}
 select{{width:100%;padding:12px 12px;border-radius:12px;border:1px solid var(--border);background:#fff;font-weight:700}}
 .btn{{display:inline-flex;align-items:center;justify-content:center;gap:10px;padding:11px 14px;border-radius:12px;border:1px solid var(--border);background:var(--accent);color:#fff;font-weight:950;cursor:pointer;text-decoration:none}}
 .btn.secondary{{background:#fff;color:var(--text);font-weight:900}}
-.hint{{color:var(--muted);margin-top:10px;font-weight:700}}
+.kpi{{border:1px solid var(--border);border-radius:12px;padding:12px;background:#fff}}
+.kpi .title{{font-weight:800;color:var(--muted);font-size:12px}}
+.kpi .value{{font-weight:1000;font-size:24px;margin-top:6px}}
+.listBox{{border:1px solid var(--border);border-radius:12px;padding:10px;background:var(--soft);max-height:230px;overflow:auto}}
+.row{{display:flex;justify-content:space-between;gap:10px;padding:7px 0;border-bottom:1px dashed #dbe3ef}}
+.row:last-child{{border-bottom:none}}
+.badge{{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:900;text-transform:uppercase}}
+.b-rappel{{background:#fee2e2;color:var(--late)}}
+.b-suivre{{background:#ffedd5;color:var(--warn)}}
+.b-clos{{background:#dcfce7;color:var(--ok)}}
+.timeline{{display:flex;flex-direction:column;gap:8px;max-height:340px;overflow:auto}}
+.tItem{{border:1px solid var(--border);border-radius:10px;padding:10px;background:#fff}}
+.tTop{{display:flex;justify-content:space-between;gap:8px;align-items:center}}
+.small{{font-size:12px;color:var(--muted);font-weight:700}}
+.empty{{color:var(--muted);font-style:italic}}
 </style>
 </head>
 <body>
@@ -1957,7 +1995,7 @@ select{{width:100%;padding:12px 12px;border-radius:12px;border:1px solid var(--b
         </div>
         <div>
           <label>Réunion</label>
-          <select id="meeting">
+          <select id="meeting" onchange="refreshDashboard()">
             {meeting_opts if meeting_opts else '<option value="">— Sélectionne un projet —</option>'}
           </select>
         </div>
@@ -1966,7 +2004,41 @@ select{{width:100%;padding:12px 12px;border-radius:12px;border:1px solid var(--b
       <div style="display:flex;gap:10px;margin-top:14px;flex-wrap:wrap">
         <button class="btn" type="button" onclick="openCR()">Ouvrir le compte-rendu</button>
       </div>
+    </div>
 
+    <div class="card">
+      <div style="font-weight:1000;margin-bottom:10px">KPI réunion sélectionnée</div>
+      <div class="grid3">
+        <div class="kpi"><div class="title">Rappels ouverts</div><div class="value" id="kpiRem">-</div></div>
+        <div class="kpi"><div class="title">À suivre ouverts</div><div class="value" id="kpiFol">-</div></div>
+        <div class="kpi"><div class="title">Date de référence</div><div class="value" id="kpiDate" style="font-size:18px">-</div></div>
+      </div>
+      <div class="grid" style="margin-top:10px">
+        <div>
+          <div style="font-weight:900;margin-bottom:6px">Rappels par attribué</div>
+          <div class="listBox" id="ownerBox"><div class="empty">Sélectionnez une réunion.</div></div>
+        </div>
+        <div>
+          <div style="font-weight:900;margin-bottom:6px">Rappels cumulés par entreprise</div>
+          <div class="listBox" id="companyBox"><div class="empty">Sélectionnez une réunion.</div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap">
+        <div style="font-weight:1000">Chronologie / calendrier des rendus</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <select id="filterArea" onchange="refreshDashboard()"><option value="">Toutes les zones</option></select>
+          <select id="filterPackage" onchange="refreshDashboard()"><option value="">Tous les lots</option></select>
+        </div>
+      </div>
+      <div id="timeline" class="timeline" style="margin-top:10px"><div class="empty">Aucune donnée.</div></div>
+    </div>
+
+    <div class="card">
+      <div style="font-weight:1000;margin-bottom:8px">Résumé IA des sujets à suivre par zone / périmètre</div>
+      <div id="aiSummary" class="listBox"><div class="empty">Sélectionnez une réunion.</div></div>
     </div>
   </div>
 
@@ -1987,6 +2059,67 @@ function openCR(){{
   const url = `/cr?meeting_id=${{encodeURIComponent(mid)}}&project=${{encodeURIComponent(p)}}&print=1`;
   window.location.href = url;
 }}
+
+function renderRows(targetId, rows, leftKey, rightKey){{
+  const box = document.getElementById(targetId);
+  if(!box) return;
+  if(!rows || !rows.length){{ box.innerHTML = '<div class="empty">Aucune donnée.</div>'; return; }}
+  box.innerHTML = rows.map(r => `<div class="row"><div>${{r[leftKey]||''}}</div><strong>${{r[rightKey]||0}}</strong></div>`).join('');
+}}
+
+function fillSelect(id, options, selectedValue, allLabel){{
+  const el = document.getElementById(id);
+  if(!el) return;
+  const base = `<option value="">${{allLabel}}</option>`;
+  const opts = (options || []).map(v => `<option value="${{v}}" ${{v===selectedValue?'selected':''}}>${{v}}</option>`).join('');
+  el.innerHTML = base + opts;
+}}
+
+async function refreshDashboard(){{
+  const meeting = document.getElementById('meeting')?.value || '';
+  const project = document.getElementById('project')?.value || '';
+  const area = document.getElementById('filterArea')?.value || '';
+  const pack = document.getElementById('filterPackage')?.value || '';
+  if(!meeting) return;
+  const url = `/api/home_meeting_dashboard?meeting_id=${{encodeURIComponent(meeting)}}&project=${{encodeURIComponent(project)}}&area=${{encodeURIComponent(area)}}&package=${{encodeURIComponent(pack)}}`;
+  const res = await fetch(url);
+  const data = await res.json();
+  if(data.error){{ console.error(data.error); return; }}
+
+  document.getElementById('kpiRem').textContent = data.kpis?.open_reminders ?? 0;
+  document.getElementById('kpiFol').textContent = data.kpis?.open_followups ?? 0;
+  document.getElementById('kpiDate').textContent = data.reference_date || '-';
+  renderRows('ownerBox', data.kpis?.owners || [], 'owner', 'count');
+  renderRows('companyBox', data.kpis?.company_cumulative || [], 'name', 'count');
+
+  const timelineEl = document.getElementById('timeline');
+  const timeline = data.timeline || [];
+  if(!timeline.length){{
+    timelineEl.innerHTML = '<div class="empty">Aucun rendu avec date selon les filtres.</div>';
+  }} else {{
+    timelineEl.innerHTML = timeline.map(it => `
+      <div class="tItem">
+        <div class="tTop">
+          <strong>${{it.deadline_txt || it.deadline || ''}} • ${{it.title || '(Sans titre)'}}</strong>
+          <span class="badge ${{it.status==='rappel'?'b-rappel':(it.status==='a_suivre'?'b-suivre':'b-clos')}}">${{it.status==='rappel'?'Rappel':(it.status==='a_suivre'?'À suivre':'Clos')}}</span>
+        </div>
+        <div class="small">Zone: ${{it.area || 'Général'}} • Lot: ${{it.package || 'Sans lot'}} • Entreprise: ${{it.company || 'Non renseigné'}}</div>
+      </div>
+    `).join('');
+  }}
+
+  fillSelect('filterArea', data.filters?.areas || [], area, 'Toutes les zones');
+  fillSelect('filterPackage', data.filters?.packages || [], pack, 'Tous les lots');
+
+  const ai = data.ai_summary_by_area || {{}};
+  const aiEl = document.getElementById('aiSummary');
+  const keys = Object.keys(ai);
+  aiEl.innerHTML = keys.length
+    ? keys.map(k => `<div class="row" style="align-items:flex-start"><strong>${{k}}</strong><div style="max-width:78%">${{ai[k]}}</div></div>`).join('')
+    : '<div class="empty">Pas de synthèse disponible pour ces filtres.</div>';
+}}
+
+window.addEventListener('DOMContentLoaded', refreshDashboard);
 </script>
 
 </body>
@@ -3322,6 +3455,123 @@ def api_quality(
                 issues_by_area.setdefault(it["area"], []).extend(payload["issues"])
         score = max(0, int(100 - (total_errors / max(1, total_words)) * 100))
         return {"score": score, "total": total_errors, "issues_by_area": issues_by_area}
+    except MissingDataError as err:
+        return JSONResponse(
+            {"error": str(err), "label": err.label, "path": err.path, "env_var": err.env_var},
+            status_code=503,
+        )
+    except Exception as ex:
+        return JSONResponse({"error": str(ex)}, status_code=500)
+
+
+def _build_ai_summary_by_area(df: pd.DataFrame, ref_date: date) -> Dict[str, str]:
+    if df.empty:
+        return {}
+    out: Dict[str, str] = {}
+    for area, g in df.groupby("__area_list__", dropna=False):
+        gg = g.copy()
+        gg["__completed__"] = _series(gg, E_COL_COMPLETED, False).apply(_bool_true)
+        gg["__deadline__"] = _series(gg, E_COL_DEADLINE, None).apply(_parse_date_any)
+        open_count = int((~gg["__completed__"]).sum())
+        late_count = int(((~gg["__completed__"]) & (gg["__deadline__"].notna()) & (gg["__deadline__"] < ref_date)).sum())
+        top_titles = (
+            gg.loc[~gg["__completed__"], E_COL_TITLE]
+            .fillna("")
+            .astype(str)
+            .str.strip()
+            .loc[lambda x: x != ""]
+            .head(3)
+            .tolist()
+        )
+        summary = f"Zone {area}: {open_count} sujet(s) à suivre"
+        if late_count:
+            summary += f", dont {late_count} en rappel prioritaire"
+        if top_titles:
+            summary += ". Points clés: " + "; ".join(top_titles)
+        out[str(area)] = summary + "."
+    return out
+
+
+@app.get("/api/home_meeting_dashboard", response_class=JSONResponse)
+def api_home_meeting_dashboard(
+    meeting_id: str = Query(...),
+    project: str = Query(default=""),
+    area: str = Query(default=""),
+    package: str = Query(default=""),
+):
+    try:
+        mrow = meeting_row(meeting_id)
+        project = (project or str(mrow.get(M_COL_PROJECT_TITLE, ""))).strip()
+        ref_date = _parse_date_any(mrow.get(M_COL_DATE)) or date.today()
+
+        rem_df = reminders_for_project(project_title=project, ref_date=ref_date, max_level=8)
+        fol_df = followups_for_project(project_title=project, ref_date=ref_date, exclude_entry_ids=set())
+
+        owner_counts = []
+        if not rem_df.empty:
+            owner_series = _series(rem_df, E_COL_OWNER, "").fillna("").astype(str).str.strip()
+            owner_series = owner_series.replace("", "Non attribué")
+            for name, count in owner_series.value_counts().head(8).items():
+                owner_counts.append({"owner": str(name), "count": int(count)})
+
+        company_counts = reminders_by_company(rem_df)
+
+        entries = get_entries().copy()
+        entries = entries.loc[entries[E_COL_PROJECT_TITLE].fillna("").astype(str).str.strip() == project].copy()
+        entries["__is_task__"] = _series(entries, E_COL_IS_TASK, False).apply(_bool_true)
+        entries = entries.loc[entries["__is_task__"] == True].copy()
+        entries["__deadline__"] = _series(entries, E_COL_DEADLINE, None).apply(_parse_date_any)
+        entries = entries.loc[entries["__deadline__"].notna()].copy()
+        entries = _explode_areas(entries)
+        entries = _explode_packages(entries)
+
+        if area:
+            entries = entries.loc[entries["__area_list__"].astype(str) == area].copy()
+            rem_df = rem_df.loc[rem_df["__area_list__"].astype(str) == area].copy() if not rem_df.empty else rem_df
+            fol_df = fol_df.loc[fol_df["__area_list__"].astype(str) == area].copy() if not fol_df.empty else fol_df
+        if package:
+            entries = entries.loc[entries["__package_list__"].astype(str) == package].copy()
+
+        timeline = []
+        if not entries.empty:
+            entries["__completed__"] = _series(entries, E_COL_COMPLETED, False).apply(_bool_true)
+            entries["__company__"] = _series(entries, E_COL_COMPANY_TASK, "").fillna("").astype(str).str.strip()
+            entries["__company__"] = entries["__company__"].replace("", "Non renseigné")
+            entries = entries.sort_values("__deadline__", ascending=True)
+            for _, r in entries.head(80).iterrows():
+                deadline = r.get("__deadline__")
+                is_open = not bool(r.get("__completed__", False))
+                status = "clos"
+                if is_open and deadline and deadline < ref_date:
+                    status = "rappel"
+                elif is_open:
+                    status = "a_suivre"
+                timeline.append({
+                    "title": str(r.get(E_COL_TITLE, "") or "").strip(),
+                    "deadline": deadline.isoformat() if deadline else "",
+                    "deadline_txt": _fmt_date(deadline),
+                    "area": str(r.get("__area_list__", "Général")),
+                    "package": str(r.get("__package_list__", "Sans lot")),
+                    "company": str(r.get("__company__", "Non renseigné")),
+                    "status": status,
+                })
+
+        area_options = sorted({str(a) for a in entries.get("__area_list__", pd.Series([], dtype=str)).dropna().astype(str) if str(a).strip()})
+        package_options = sorted({str(a) for a in entries.get("__package_list__", pd.Series([], dtype=str)).dropna().astype(str) if str(a).strip()})
+        ai_summary = _build_ai_summary_by_area(entries, ref_date)
+
+        return {
+            "kpis": {
+                "open_reminders": int(len(rem_df)),
+                "open_followups": int(len(fol_df)),
+                "owners": owner_counts,
+                "company_cumulative": company_counts,
+            },
+            "timeline": timeline,
+            "filters": {"areas": area_options, "packages": package_options},
+            "ai_summary_by_area": ai_summary,
+            "reference_date": ref_date.isoformat(),
+        }
     except MissingDataError as err:
         return JSONResponse(
             {"error": str(err), "label": err.label, "path": err.path, "env_var": err.env_var},
