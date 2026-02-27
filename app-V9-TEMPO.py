@@ -1973,38 +1973,53 @@ function _addDaysIso(iso, days){
   return d.toISOString().slice(0,10);
 }
 
-function timelineTicks(startIso, endIso, zoomMode){
+function timelineTicks(startIso, endIso, zoomMode, pxPerDay){
   const out = [];
   if(!startIso || !endIso) return out;
   let cur = new Date(startIso + "T00:00:00");
   const end = new Date(endIso + "T00:00:00");
+  const oneDay = 86400000;
 
   if(zoomMode === 'year'){
     cur = new Date(cur.getFullYear(), 0, 1);
     while(cur <= end){
-      out.push({ iso: cur.toISOString().slice(0,10), label: String(cur.getFullYear()) });
-      cur = new Date(cur.getFullYear()+1, 0, 1);
+      const next = new Date(cur.getFullYear()+1, 0, 1);
+      out.push({ iso: cur.toISOString().slice(0,10), next_iso: next.toISOString().slice(0,10), label: String(cur.getFullYear()) });
+      cur = next;
     }
-  } else if(zoomMode === 'month'){
+    return out;
+  }
+
+  if(zoomMode === 'month'){
     cur = new Date(cur.getFullYear(), cur.getMonth(), 1);
     while(cur <= end){
-      out.push({ iso: cur.toISOString().slice(0,10), label: cur.toLocaleDateString('fr-FR',{month:'short',year:'2-digit'}) });
-      cur = new Date(cur.getFullYear(), cur.getMonth()+1, 1);
+      const next = new Date(cur.getFullYear(), cur.getMonth()+1, 1);
+      out.push({ iso: cur.toISOString().slice(0,10), next_iso: next.toISOString().slice(0,10), label: cur.toLocaleDateString('fr-FR',{month:'short',year:'2-digit'}) });
+      cur = next;
     }
-  } else if(zoomMode === 'week'){
+    return out;
+  }
+
+  if(zoomMode === 'week'){
     const day = cur.getDay();
     const diff = (day === 0 ? -6 : 1 - day);
     cur.setDate(cur.getDate() + diff);
     while(cur <= end){
-      const weekLabel = `S${Math.ceil((((cur - new Date(cur.getFullYear(),0,1)) / 86400000) + new Date(cur.getFullYear(),0,1).getDay()+1)/7)}`;
-      out.push({ iso: cur.toISOString().slice(0,10), label: `${weekLabel} ${String(cur.getFullYear()).slice(2)}` });
-      cur.setDate(cur.getDate()+7);
+      const next = new Date(cur.getTime() + 7*oneDay);
+      const weekLabel = `S${Math.ceil((((cur - new Date(cur.getFullYear(),0,1)) / oneDay) + new Date(cur.getFullYear(),0,1).getDay()+1)/7)}`;
+      out.push({ iso: cur.toISOString().slice(0,10), next_iso: next.toISOString().slice(0,10), label: `${weekLabel} ${String(cur.getFullYear()).slice(2)}` });
+      cur = next;
     }
-  } else {
-    while(cur <= end){
-      out.push({ iso: cur.toISOString().slice(0,10), label: cur.toLocaleDateString('fr-FR',{day:'2-digit',month:'2-digit'}) });
-      cur.setDate(cur.getDate()+1);
-    }
+    return out;
+  }
+
+  // day mode: adapt step to avoid crushed labels
+  const targetPx = 70;
+  const dayStep = Math.max(1, Math.ceil(targetPx / Math.max(8, pxPerDay || 22)));
+  while(cur <= end){
+    const next = new Date(cur.getTime() + dayStep*oneDay);
+    out.push({ iso: cur.toISOString().slice(0,10), next_iso: next.toISOString().slice(0,10), label: cur.toLocaleDateString('fr-FR',{day:'2-digit',month:'2-digit'}) });
+    cur = next;
   }
   return out;
 }
@@ -2060,14 +2075,17 @@ function renderTimeline(data){
   const endIso = cal.end || timeline[timeline.length-1]?.end || startIso;
   const totalDays = Math.max(1, Number(cal.total_days || 1));
   const totalWidth = Math.max(900, totalDays * pxPerDay);
-  const ticks = timelineTicks(startIso, endIso, zoomMode);
+  const ticks = timelineTicks(startIso, endIso, zoomMode, pxPerDay);
 
   const startDate = new Date(startIso + 'T00:00:00');
   const ticksHtml = ticks.map(t => {
     const td = new Date(t.iso + 'T00:00:00');
+    const nd = new Date((t.next_iso || t.iso) + 'T00:00:00');
     const offDays = Math.max(0, Math.floor((td - startDate)/86400000));
+    const spanDays = Math.max(1, Math.floor((nd - td)/86400000));
     const left = offDays * pxPerDay;
-    return `<div class="gTick" style="left:${left}px">${t.label}</div>`;
+    const width = Math.max(48, spanDays * pxPerDay);
+    return `<div class="gTick" style="left:${left}px;width:${width}px"><span>${t.label}</span></div>`;
   }).join('');
 
   const rowsHtml = timeline.map(it => {
@@ -2173,7 +2191,8 @@ select{{width:100%;padding:12px 12px;border-radius:12px;border:1px solid var(--b
 .gTop{{min-width:max-content;position:sticky;top:0;z-index:2;background:#fff}}
 .gTopRight{{position:relative;height:34px;border-bottom:1px solid var(--border);background:#f8fafc}}
 .gTicks{{position:relative;height:100%}}
-.gTick{{position:absolute;top:0;bottom:0;border-left:1px solid #cbd5e1;font-size:10px;font-weight:900;color:#334155;padding-left:4px;display:flex;align-items:center;white-space:nowrap;background:rgba(248,250,252,.65)}}
+.gTick{{position:absolute;top:0;bottom:0;border-left:1px solid #cbd5e1;border-right:1px solid #e2e8f0;font-size:11px;font-weight:900;color:#334155;display:flex;align-items:center;justify-content:center;white-space:nowrap;background:rgba(248,250,252,.92);overflow:hidden}}
+.gTick span{{padding:0 6px;text-overflow:ellipsis;overflow:hidden}}
 .gBody{{min-width:max-content}}
 .gRow{{min-width:max-content}}
 .gTrack{{position:relative;height:32px;border-bottom:1px solid #f1f5f9;background:repeating-linear-gradient(to right,#fff,#fff 47px,#f8fafc 47px,#f8fafc 48px)}}
