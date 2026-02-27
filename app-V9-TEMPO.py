@@ -124,13 +124,15 @@ logger = logging.getLogger("metronome.glide")
 
 CACHE_TTL = 60
 HTTP_TIMEOUT = 15
-DATA_DEBUG = os.getenv("DATA_DEBUG", "1").strip().lower() in {"1", "true", "yes", "y", "on"}
+DATA_DEBUG = os.getenv("DATA_DEBUG", "0").strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
 DEFAULT_GLIDE_QUERY_URLS = [
-    "https://api.glideapps.com/api/function/queryTables",
-    "https://api.glideapps.com/api/functions/queryTables",
     "https://api.glideapp.io/api/function/queryTables",
+    "https://api.glideapp.io/api/container/queryTables",
+    "https://api.glideapps.com/api/function/queryTables",
+    "https://api.glideapps.com/api/container/queryTables",
+    "https://api.glideapps.com/api/functions/queryTables",
     "https://api.glideapp.io/api/functions/queryTables",
 ]
 
@@ -694,7 +696,9 @@ def _get_glide_tables_cached(table_names: List[str]) -> Dict[str, pd.DataFrame]:
 
 
 def _load_glide_table(table_name: str, mapping: Dict[str, List[str]]) -> pd.DataFrame:
-    raw_tables = _get_glide_tables_cached(list(GLIDE_TABLES.keys()))
+    # Charge uniquement la table demandée pour éviter de bloquer sur des tables optionnelles
+    # non configurées (documents/packages/areas/comments) et limiter les erreurs parasites.
+    raw_tables = _get_glide_tables_cached([table_name])
     raw_df = raw_tables.get(table_name, pd.DataFrame())
     mapping_effective = _merge_mapping_overrides(mapping, _get_column_overrides(table_name))
     mapping_effective = _auto_detect_mapping(table_name, raw_df, raw_tables, mapping_effective)
@@ -1365,6 +1369,19 @@ def _explode_areas(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _explode_packages(df: pd.DataFrame) -> pd.DataFrame:
+    if E_COL_PACKAGES in df.columns:
+        df["__lot__"] = df[E_COL_PACKAGES].fillna("").astype(str).str.strip()
+        df.loc[df["__lot__"] == "", "__lot__"] = "Non renseigné"
+    else:
+        df["__lot__"] = "Non renseigné"
+    df["__lot_list__"] = df["__lot__"].apply(lambda s: [x.strip() for x in s.split(",")] if "," in s else [s])
+    df = df.explode("__lot_list__")
+    df["__lot_list__"] = df["__lot_list__"].fillna("Non renseigné").astype(str).str.strip()
+    df.loc[df["__lot_list__"] == "", "__lot_list__"] = "Non renseigné"
+    return df
+
+
 def reminders_for_project(
     project_title: str,
     ref_date: date,
@@ -1447,6 +1464,16 @@ def reminders_by_company(rem_df: pd.DataFrame) -> List[Dict]:
     for _, r in g.iterrows():
         out.append({"name": str(r["__company__"]), "logo": str(r["logo"] or "").strip(), "count": int(r["count"])})
     return out
+
+
+def reminders_by_owner(rem_df: pd.DataFrame) -> List[Dict[str, object]]:
+    if rem_df.empty:
+        return []
+    owners = _series(rem_df, E_COL_OWNER, "").fillna("").astype(str).str.strip()
+    owners = owners.replace("", "Non attribué")
+    g = owners.value_counts().reset_index()
+    g.columns = ["name", "count"]
+    return [{"name": str(r["name"]), "count": int(r["count"])} for _, r in g.iterrows()]
 
 
 # -------------------------
@@ -2595,6 +2622,18 @@ select{{width:100%;padding:12px 12px;border-radius:12px;border:1px solid var(--b
 .btn{{display:inline-flex;align-items:center;justify-content:center;gap:10px;padding:11px 14px;border-radius:12px;border:1px solid var(--border);background:var(--accent);color:#fff;font-weight:950;cursor:pointer;text-decoration:none}}
 .btn.secondary{{background:#fff;color:var(--text);font-weight:900}}
 .hint{{color:var(--muted);margin-top:10px;font-weight:700}}
+.kpiGrid{{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:14px}}
+@media(max-width:980px){{.kpiGrid{{grid-template-columns:1fr}}}}
+.kpiCard{{border:1px solid var(--border);border-radius:12px;padding:12px;background:var(--soft)}}
+.kpiLabel{{font-size:12px;color:var(--muted);font-weight:800}}
+.kpiValue{{font-size:28px;font-weight:1000;line-height:1.1}}
+.miniList{{margin:8px 0 0 0;padding-left:18px}}
+.miniList li{{margin:4px 0}}
+.filters{{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:14px 0 8px}}
+@media(max-width:780px){{.filters{{grid-template-columns:1fr}}}}
+.timeline{{border:1px solid var(--border);border-radius:12px;padding:10px;max-height:320px;overflow:auto;background:#fff}}
+.tlItem{{border-left:3px solid #cbd5e1;padding:8px 10px;margin:8px 0;background:#f8fafc;border-radius:8px}}
+.tlMeta{{font-size:12px;color:var(--muted);font-weight:700}}
 </style>
 </head>
 <body>
@@ -2628,6 +2667,43 @@ select{{width:100%;padding:12px 12px;border-radius:12px;border:1px solid var(--b
         <button class="btn" type="button" onclick="openCR()">Ouvrir le compte-rendu</button>
       </div>
 
+      <div id="homeInsights" style="margin-top:12px;display:none">
+        <div class="kpiGrid">
+          <div class="kpiCard">
+            <div class="kpiLabel">Rappels ouverts (réunion)</div>
+            <div class="kpiValue" id="kpiOpenReminders">0</div>
+            <ul class="miniList" id="kpiOwners"><li class="hint">Aucune donnée</li></ul>
+          </div>
+          <div class="kpiCard">
+            <div class="kpiLabel">Rappels cumulés par entreprise</div>
+            <ul class="miniList" id="kpiCompanies"><li class="hint">Aucune donnée</li></ul>
+          </div>
+          <div class="kpiCard">
+            <div class="kpiLabel">Échéances visibles</div>
+            <div class="kpiValue" id="kpiTimelineCount">0</div>
+            <div class="hint">Filtrables par zone et lot</div>
+          </div>
+        </div>
+
+        <div class="filters">
+          <div>
+            <label>Filtre zone</label>
+            <select id="filterArea" onchange="applyTimelineFilters()">
+              <option value="">Toutes les zones</option>
+            </select>
+          </div>
+          <div>
+            <label>Filtre lot</label>
+            <select id="filterLot" onchange="applyTimelineFilters()">
+              <option value="">Tous les lots</option>
+            </select>
+          </div>
+        </div>
+        <div class="timeline" id="timelineList">
+          <div class="hint">Sélectionne une réunion pour afficher la chronologie.</div>
+        </div>
+      </div>
+
     </div>
   </div>
 
@@ -2648,6 +2724,79 @@ function openCR(){{
   const url = `/cr?meeting_id=${{encodeURIComponent(mid)}}&project=${{encodeURIComponent(p)}}&print=1`;
   window.location.href = url;
 }}
+
+let timelineItems = [];
+
+function renderSimpleList(el, items, emptyLabel){{
+  if(!el) return;
+  if(!items || !items.length){{
+    el.innerHTML = `<li class='hint'>${{emptyLabel}}</li>`;
+    return;
+  }}
+  el.innerHTML = items.map(it => `<li>${{it.label}}</li>`).join('');
+}}
+
+function renderSelectOptions(el, values, allLabel){{
+  if(!el) return;
+  const current = el.value || "";
+  const base = `<option value="">${{allLabel}}</option>`;
+  const opts = (values||[]).map(v => `<option value="${{v}}">${{v}}</option>`).join('');
+  el.innerHTML = base + opts;
+  if(current && values.includes(current)){{ el.value = current; }}
+}}
+
+function applyTimelineFilters(){{
+  const area = document.getElementById('filterArea')?.value || "";
+  const lot = document.getElementById('filterLot')?.value || "";
+  const list = document.getElementById('timelineList');
+  if(!list) return;
+  const filtered = timelineItems.filter(it => (!area || it.area === area) && (!lot || it.lot === lot));
+  document.getElementById('kpiTimelineCount').textContent = String(filtered.length);
+  if(!filtered.length){{
+    list.innerHTML = `<div class='hint'>Aucune échéance pour ce filtre.</div>`;
+    return;
+  }}
+  list.innerHTML = filtered.map(it => `
+    <div class="tlItem">
+      <div><strong>${{it.date_label}}</strong> — ${{it.title}}</div>
+      <div class="tlMeta">Zone : ${{it.area}} • Lot : ${{it.lot}} • Entreprise : ${{it.company}}</div>
+    </div>
+  `).join('');
+}}
+
+async function loadHomeInsights(){{
+  const meetingId = document.getElementById('meeting')?.value || "";
+  const project = document.getElementById('project')?.value || "";
+  const panel = document.getElementById('homeInsights');
+  if(!meetingId){{ if(panel) panel.style.display = 'none'; return; }}
+  try{{
+    const resp = await fetch(`/api/home-kpis?meeting_id=${{encodeURIComponent(meetingId)}}&project=${{encodeURIComponent(project)}}`);
+    const data = await resp.json();
+    if(!resp.ok) throw new Error(data.error || 'Erreur API');
+    panel.style.display = 'block';
+    document.getElementById('kpiOpenReminders').textContent = String(data.open_reminders || 0);
+    renderSimpleList(
+      document.getElementById('kpiOwners'),
+      (data.reminders_by_owner || []).map(it => ({{ label: `${{it.name}} : ${{it.count}}` }})),
+      'Aucun rappel attribué'
+    );
+    renderSimpleList(
+      document.getElementById('kpiCompanies'),
+      (data.reminders_by_company || []).map(it => ({{ label: `${{it.name}} : ${{it.count}}` }})),
+      'Aucun rappel entreprise'
+    );
+    timelineItems = data.timeline || [];
+    renderSelectOptions(document.getElementById('filterArea'), data.areas || [], 'Toutes les zones');
+    renderSelectOptions(document.getElementById('filterLot'), data.lots || [], 'Tous les lots');
+    applyTimelineFilters();
+  }}catch(err){{
+    panel.style.display = 'block';
+    document.getElementById('timelineList').innerHTML = `<div class='hint'>Impossible de charger les KPI: ${{err.message}}</div>`;
+  }}
+}}
+
+document.getElementById('meeting')?.addEventListener('change', loadHomeInsights);
+loadHomeInsights();
 </script>
 
 </body>
@@ -3892,6 +4041,68 @@ def api_memos(project: str = Query("", alias="project"), area: str = Query("", a
                 }
             )
         return {"items": items}
+    except MissingDataError as err:
+        return JSONResponse(
+            {"error": str(err), "label": err.label, "path": err.path, "env_var": err.env_var},
+            status_code=503,
+        )
+    except Exception as ex:
+        return JSONResponse({"error": str(ex)}, status_code=500)
+
+
+@app.get("/api/home-kpis", response_class=JSONResponse)
+def api_home_kpis(
+    meeting_id: str = Query(...),
+    project: str = Query(default=""),
+):
+    try:
+        mrow = meeting_row(meeting_id)
+        project = (project or str(mrow.get(M_COL_PROJECT_TITLE, ""))).strip()
+        ref_date = _parse_date_any(mrow.get(M_COL_DATE)) or date.today()
+
+        rem_df = reminders_for_project(project_title=project, ref_date=ref_date, max_level=99)
+        rem_df = _explode_packages(rem_df)
+
+        meeting_entries = entries_for_meeting(meeting_id)
+        if not meeting_entries.empty:
+            meeting_entries = _explode_areas(meeting_entries)
+            meeting_entries = _explode_packages(meeting_entries)
+            meeting_entries["__is_task__"] = _series(meeting_entries, E_COL_IS_TASK, False).apply(_bool_true)
+            meeting_entries = meeting_entries.loc[meeting_entries["__is_task__"] == True].copy()
+        else:
+            meeting_entries = pd.DataFrame()
+
+        timeline_items = []
+        if not rem_df.empty:
+            for _, r in rem_df.iterrows():
+                d = _parse_date_any(r.get(E_COL_DEADLINE))
+                timeline_items.append(
+                    {
+                        "title": str(r.get(E_COL_TITLE, "") or "").strip() or "Sans titre",
+                        "date": d.isoformat() if d else "9999-12-31",
+                        "date_label": _fmt_date(d) if d else "Sans échéance",
+                        "area": str(r.get("__area_list__", "Général") or "Général").strip() or "Général",
+                        "lot": str(r.get("__lot_list__", "Non renseigné") or "Non renseigné").strip() or "Non renseigné",
+                        "company": str(r.get(E_COL_COMPANY_TASK, "") or "Non renseigné").strip() or "Non renseigné",
+                    }
+                )
+
+        timeline_items.sort(key=lambda x: x.get("date") or "9999-12-31")
+
+        areas = sorted({str(x.get("area", "Général")) for x in timeline_items if str(x.get("area", "")).strip()})
+        lots = sorted({str(x.get("lot", "Non renseigné")) for x in timeline_items if str(x.get("lot", "")).strip()})
+
+        return {
+            "meeting_id": meeting_id,
+            "project": project,
+            "open_reminders": int(len(rem_df)),
+            "meeting_open_tasks": int(len(meeting_entries)),
+            "reminders_by_owner": reminders_by_owner(rem_df)[:10],
+            "reminders_by_company": reminders_by_company(rem_df)[:10],
+            "timeline": timeline_items[:300],
+            "areas": areas,
+            "lots": lots,
+        }
     except MissingDataError as err:
         return JSONResponse(
             {"error": str(err), "label": err.label, "path": err.path, "env_var": err.env_var},
