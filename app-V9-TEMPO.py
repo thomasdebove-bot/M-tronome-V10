@@ -124,13 +124,15 @@ logger = logging.getLogger("metronome.glide")
 
 CACHE_TTL = 60
 HTTP_TIMEOUT = 15
-DATA_DEBUG = os.getenv("DATA_DEBUG", "1").strip().lower() in {"1", "true", "yes", "y", "on"}
+DATA_DEBUG = os.getenv("DATA_DEBUG", "0").strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
 DEFAULT_GLIDE_QUERY_URLS = [
-    "https://api.glideapps.com/api/function/queryTables",
-    "https://api.glideapps.com/api/functions/queryTables",
     "https://api.glideapp.io/api/function/queryTables",
+    "https://api.glideapp.io/api/container/queryTables",
+    "https://api.glideapps.com/api/function/queryTables",
+    "https://api.glideapps.com/api/container/queryTables",
+    "https://api.glideapps.com/api/functions/queryTables",
     "https://api.glideapp.io/api/functions/queryTables",
 ]
 
@@ -694,7 +696,9 @@ def _get_glide_tables_cached(table_names: List[str]) -> Dict[str, pd.DataFrame]:
 
 
 def _load_glide_table(table_name: str, mapping: Dict[str, List[str]]) -> pd.DataFrame:
-    raw_tables = _get_glide_tables_cached(list(GLIDE_TABLES.keys()))
+    # Charge uniquement la table demandée pour éviter de bloquer sur des tables optionnelles
+    # non configurées (documents/packages/areas/comments) et limiter les erreurs parasites.
+    raw_tables = _get_glide_tables_cached([table_name])
     raw_df = raw_tables.get(table_name, pd.DataFrame())
     mapping_effective = _merge_mapping_overrides(mapping, _get_column_overrides(table_name))
     mapping_effective = _auto_detect_mapping(table_name, raw_df, raw_tables, mapping_effective)
