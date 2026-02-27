@@ -2560,6 +2560,71 @@ def render_home(project: Optional[str] = None, print_mode: bool = False) -> str:
         for p in projects
     )
 
+    project_entries = get_entries().copy()
+    if project:
+        project_entries = project_entries.loc[
+            project_entries[E_COL_PROJECT_TITLE].fillna("").astype(str).str.strip() == project
+        ].copy()
+    else:
+        project_entries = project_entries.iloc[0:0].copy()
+
+    def _split_labels(raw_value) -> List[str]:
+        if raw_value is None or (isinstance(raw_value, float) and pd.isna(raw_value)):
+            return []
+        return [x.strip() for x in re.split(r"[,;/]+", str(raw_value)) if x.strip()]
+
+    meeting_ref = []
+    for _, mr in m.iterrows():
+        mid = str(mr.get(M_COL_ID, "") or "").strip()
+        if not mid:
+            continue
+        md = _parse_date_any(mr.get(M_COL_DATE))
+        meeting_ref.append(
+            {
+                "id": mid,
+                "date": md.isoformat() if md else "",
+                "label": _fmt_date(md) or str(mr.get(M_COL_DATE_DISPLAY, "") or "").strip() or str(mr.get(M_COL_DATE, "") or "").strip(),
+            }
+        )
+
+    task_records = []
+    if not project_entries.empty:
+        project_entries = project_entries.copy()
+        project_entries["__is_task__"] = _series(project_entries, E_COL_IS_TASK, False).apply(_bool_true)
+        project_entries = project_entries.loc[project_entries["__is_task__"] == True].copy()
+
+        project_entries["__done__"] = _series(project_entries, E_COL_COMPLETED_END, None).apply(_parse_date_any)
+        project_entries["__completed__"] = _series(project_entries, E_COL_COMPLETED, False).apply(_bool_true)
+        project_entries.loc[project_entries["__done__"].notna(), "__completed__"] = True
+        project_entries["__deadline__"] = _series(project_entries, E_COL_DEADLINE, None).apply(_parse_date_any)
+        project_entries["__created__"] = _series(project_entries, E_COL_CREATED, None).apply(_parse_date_any)
+
+        for _, er in project_entries.iterrows():
+            deadline = er.get("__deadline__")
+            created = er.get("__created__")
+            done = er.get("__done__")
+            task_records.append(
+                {
+                    "id": str(er.get(E_COL_ID, "") or "").strip(),
+                    "title": str(er.get(E_COL_TITLE, "") or "").strip() or "Sans titre",
+                    "meeting_id": str(er.get(E_COL_MEETING_ID, "") or "").strip(),
+                    "company": str(er.get(E_COL_COMPANY_TASK, "") or "").strip() or "Non renseigné",
+                    "owner": str(er.get(E_COL_OWNER, "") or "").strip() or "Non attribué",
+                    "areas": _split_labels(er.get(E_COL_AREAS, "")) or ["Général"],
+                    "lots": _split_labels(er.get(E_COL_PACKAGES, "")) or ["Non renseigné"],
+                    "deadline": deadline.isoformat() if deadline else "",
+                    "created": created.isoformat() if created else "",
+                    "done": done.isoformat() if done else "",
+                    "completed": bool(er.get("__completed__", False)),
+                }
+            )
+
+    insights_payload = {
+        "project": project or "",
+        "meetings": meeting_ref,
+        "tasks": task_records,
+    }
+
     meeting_opts = ""
     for _, r in m.iterrows():
         mid = str(r.get(M_COL_ID, "")).strip()
@@ -2595,6 +2660,20 @@ select{{width:100%;padding:12px 12px;border-radius:12px;border:1px solid var(--b
 .btn{{display:inline-flex;align-items:center;justify-content:center;gap:10px;padding:11px 14px;border-radius:12px;border:1px solid var(--border);background:var(--accent);color:#fff;font-weight:950;cursor:pointer;text-decoration:none}}
 .btn.secondary{{background:#fff;color:var(--text);font-weight:900}}
 .hint{{color:var(--muted);margin-top:10px;font-weight:700}}
+.insights{{margin-top:14px;border-top:1px solid var(--border);padding-top:14px;display:grid;gap:12px}}
+.kpis{{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}}
+@media(max-width:980px){{.kpis{{grid-template-columns:1fr}}}}
+.kpiCard{{border:1px solid var(--border);border-radius:12px;padding:10px;background:var(--soft)}}
+.kpiTitle{{font-size:12px;color:var(--muted);font-weight:800}}
+.kpiValue{{font-size:24px;font-weight:1000}}
+.kpiList{{margin-top:8px;display:flex;flex-direction:column;gap:6px;max-height:190px;overflow:auto}}
+.kpiRow{{display:flex;justify-content:space-between;gap:8px;padding:6px 8px;border:1px solid var(--border);border-radius:10px;background:#fff;font-weight:700}}
+.filters{{display:flex;gap:10px;flex-wrap:wrap}}
+.timeline{{border:1px solid var(--border);border-radius:12px;padding:10px;max-height:340px;overflow:auto;background:#fff}}
+.timeRow{{padding:8px;border-left:3px solid #cbd5e1;margin:8px 0 8px 4px;background:#f8fafc;border-radius:8px}}
+.timeDate{{font-size:12px;color:var(--muted);font-weight:800}}
+.timeTitle{{font-weight:900}}
+.timeMeta{{font-size:12px;color:var(--muted)}}
 </style>
 </head>
 <body>
@@ -2628,10 +2707,43 @@ select{{width:100%;padding:12px 12px;border-radius:12px;border:1px solid var(--b
         <button class="btn" type="button" onclick="openCR()">Ouvrir le compte-rendu</button>
       </div>
 
+      <div class="insights">
+        <div style="font-weight:900">KPI réunion & chronologie des rendus</div>
+        <div class="kpis">
+          <div class="kpiCard">
+            <div class="kpiTitle">Rappels ouverts (à date de réunion)</div>
+            <div class="kpiValue" id="kpi-open-reminders">0</div>
+            <div class="kpiList" id="kpi-by-owner"></div>
+          </div>
+          <div class="kpiCard">
+            <div class="kpiTitle">Rappels cumulés par entreprise</div>
+            <div class="kpiList" id="kpi-by-company"></div>
+          </div>
+          <div class="kpiCard">
+            <div class="kpiTitle">Échéances filtrées (zone / lot)</div>
+            <div class="kpiValue" id="kpi-filtered-count">0</div>
+            <div class="timeMeta">Affiche les rendus calculés selon la date de la réunion sélectionnée.</div>
+          </div>
+        </div>
+        <div class="filters">
+          <div>
+            <label>Filtre zone</label>
+            <select id="filter-area" onchange="refreshInsights()"><option value="">Toutes les zones</option></select>
+          </div>
+          <div>
+            <label>Filtre lot</label>
+            <select id="filter-lot" onchange="refreshInsights()"><option value="">Tous les lots</option></select>
+          </div>
+        </div>
+        <div class="timeline" id="timeline"></div>
+      </div>
+
     </div>
   </div>
 
 <script>
+const INSIGHTS_DATA = {json.dumps(insights_payload, ensure_ascii=False)};
+
 function onProjectChange(){{
   const p = document.getElementById('project').value || "";
   const url = p ? `/?project=${{encodeURIComponent(p)}}` : "/";
@@ -2648,6 +2760,95 @@ function openCR(){{
   const url = `/cr?meeting_id=${{encodeURIComponent(mid)}}&project=${{encodeURIComponent(p)}}&print=1`;
   window.location.href = url;
 }}
+
+function fmtDate(iso){{
+  if(!iso) return "Date non définie";
+  const d = new Date(iso + "T00:00:00");
+  return d.toLocaleDateString('fr-FR');
+}}
+
+function reminderLevel(deadlineIso, completed, refIso){{
+  if(completed || !deadlineIso || !refIso) return 0;
+  const deadline = new Date(deadlineIso + "T00:00:00");
+  const ref = new Date(refIso + "T00:00:00");
+  const days = Math.floor((ref - deadline) / (1000*60*60*24));
+  if(days <= 0) return 0;
+  return Math.floor((days - 1) / 7) + 1;
+}}
+
+function hydrateFilters(){{
+  const areaSet = new Set();
+  const lotSet = new Set();
+  (INSIGHTS_DATA.tasks || []).forEach(t => {{
+    (t.areas || []).forEach(a => areaSet.add(a));
+    (t.lots || []).forEach(l => lotSet.add(l));
+  }});
+  const areaSel = document.getElementById('filter-area');
+  const lotSel = document.getElementById('filter-lot');
+  if(areaSel){{
+    [...areaSet].sort((a,b)=>a.localeCompare(b,'fr')).forEach(a => {{
+      areaSel.insertAdjacentHTML('beforeend', `<option value="${{a}}">${{a}}</option>`);
+    }});
+  }}
+  if(lotSel){{
+    [...lotSet].sort((a,b)=>a.localeCompare(b,'fr')).forEach(l => {{
+      lotSel.insertAdjacentHTML('beforeend', `<option value="${{l}}">${{l}}</option>`);
+    }});
+  }}
+}}
+
+function refreshInsights(){{
+  const meetingId = (document.getElementById('meeting') || {{value:""}}).value || "";
+  const area = (document.getElementById('filter-area') || {{value:""}}).value || "";
+  const lot = (document.getElementById('filter-lot') || {{value:""}}).value || "";
+  const m = (INSIGHTS_DATA.meetings || []).find(x => x.id === meetingId);
+  const refIso = m ? m.date : "";
+  const tasks = (INSIGHTS_DATA.tasks || []).filter(t => {{
+    if(area && !(t.areas || []).includes(area)) return false;
+    if(lot && !(t.lots || []).includes(lot)) return false;
+    return true;
+  }});
+
+  const openReminders = tasks.filter(t => reminderLevel(t.deadline, t.completed, refIso) > 0);
+  document.getElementById('kpi-open-reminders').textContent = String(openReminders.length);
+
+  const byOwner = new Map();
+  openReminders.forEach(t => byOwner.set(t.owner, (byOwner.get(t.owner) || 0) + 1));
+  const ownerHtml = [...byOwner.entries()].sort((a,b)=>b[1]-a[1]).slice(0,8)
+    .map(([owner,count]) => `<div class="kpiRow"><span>${{owner}}</span><span>${{count}}</span></div>`).join('') || "<div class='timeMeta'>Aucun rappel ouvert.</div>";
+  document.getElementById('kpi-by-owner').innerHTML = ownerHtml;
+
+  const byCompany = new Map();
+  openReminders.forEach(t => {{
+    const lvl = reminderLevel(t.deadline, t.completed, refIso);
+    byCompany.set(t.company, (byCompany.get(t.company) || 0) + lvl);
+  }});
+  const companyHtml = [...byCompany.entries()].sort((a,b)=>b[1]-a[1]).slice(0,10)
+    .map(([name,count]) => `<div class="kpiRow"><span>${{name}}</span><span>${{count}}</span></div>`).join('') || "<div class='timeMeta'>Aucun cumul.</div>";
+  document.getElementById('kpi-by-company').innerHTML = companyHtml;
+
+  const timelineRows = tasks
+    .filter(t => t.deadline || t.created)
+    .sort((a,b) => (a.deadline || a.created).localeCompare(b.deadline || b.created))
+    .map(t => {{
+      const level = reminderLevel(t.deadline, t.completed, refIso);
+      const status = t.completed ? "✅ Clôturé" : (level > 0 ? `🔔 Rappel N${{level}}` : "🕒 En cours");
+      const eventDate = t.deadline || t.created;
+      return `<div class="timeRow">
+        <div class="timeDate">${{fmtDate(eventDate)}}</div>
+        <div class="timeTitle">${{t.title}}</div>
+        <div class="timeMeta">${{t.company}} • ${{t.owner}} • Zone: ${{(t.areas||[]).join(', ')}} • Lot: ${{(t.lots||[]).join(', ')}}</div>
+        <div class="timeMeta">${{status}}</div>
+      </div>`;
+    }}).join('') || "<div class='timeMeta'>Aucun rendu pour ce filtre.</div>";
+
+  document.getElementById('timeline').innerHTML = timelineRows;
+  document.getElementById('kpi-filtered-count').textContent = String(tasks.length);
+}}
+
+document.getElementById('meeting')?.addEventListener('change', refreshInsights);
+hydrateFilters();
+refreshInsights();
 </script>
 
 </body>
