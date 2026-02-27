@@ -1967,9 +1967,18 @@ select{{width:100%;padding:12px 12px;border-radius:12px;border:1px solid var(--b
 .b-rappel{{background:#fee2e2;color:var(--late)}}
 .b-suivre{{background:#ffedd5;color:var(--warn)}}
 .b-clos{{background:#dcfce7;color:var(--ok)}}
-.timeline{{display:flex;flex-direction:column;gap:8px;max-height:340px;overflow:auto}}
-.tItem{{border:1px solid var(--border);border-radius:10px;padding:10px;background:#fff}}
-.tTop{{display:flex;justify-content:space-between;gap:8px;align-items:center}}
+.gantt{{border:1px solid var(--border);border-radius:12px;background:#fff;overflow:auto;padding:10px}}
+.gHead{{display:grid;grid-template-columns:220px 1fr;gap:8px;align-items:end;margin-bottom:8px}}
+.gMonths{{display:flex;border:1px solid var(--border);border-radius:8px;overflow:hidden}}
+.gMonth{{padding:6px 8px;border-right:1px solid var(--border);font-size:11px;font-weight:900;background:#f8fafc;white-space:nowrap;min-width:88px;text-align:center}}
+.gMonth:last-child{{border-right:none}}
+.gRow{{display:grid;grid-template-columns:220px 1fr;gap:8px;align-items:center;margin-bottom:6px}}
+.gLabel{{font-size:12px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
+.gTrack{{position:relative;height:28px;border:1px solid #dbe3ef;border-radius:8px;background:repeating-linear-gradient(to right,#fff,#fff 79px,#f8fafc 79px,#f8fafc 80px)}}
+.gBar{{position:absolute;height:20px;top:3px;border-radius:6px;padding:1px 8px;font-size:11px;font-weight:900;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;border:1px solid rgba(15,23,42,.25)}}
+.gBar.rappel{{background:#fecaca;color:#7f1d1d}}
+.gBar.a_suivre{{background:#fed7aa;color:#7c2d12}}
+.gBar.clos{{background:#bbf7d0;color:#14532d}}
 .small{{font-size:12px;color:var(--muted);font-weight:700}}
 .empty{{color:var(--muted);font-style:italic}}
 </style>
@@ -2009,31 +2018,25 @@ select{{width:100%;padding:12px 12px;border-radius:12px;border:1px solid var(--b
     <div class="card">
       <div style="font-weight:1000;margin-bottom:10px">KPI réunion sélectionnée</div>
       <div class="grid3">
-        <div class="kpi"><div class="title">Rappels ouverts</div><div class="value" id="kpiRem">-</div></div>
+        <div class="kpi"><div class="title">Rappels ouverts à date</div><div class="value" id="kpiRem">-</div></div>
         <div class="kpi"><div class="title">À suivre ouverts</div><div class="value" id="kpiFol">-</div></div>
         <div class="kpi"><div class="title">Date de référence</div><div class="value" id="kpiDate" style="font-size:18px">-</div></div>
       </div>
-      <div class="grid" style="margin-top:10px">
-        <div>
-          <div style="font-weight:900;margin-bottom:6px">Rappels par attribué</div>
-          <div class="listBox" id="ownerBox"><div class="empty">Sélectionnez une réunion.</div></div>
-        </div>
-        <div>
-          <div style="font-weight:900;margin-bottom:6px">Rappels cumulés par entreprise</div>
-          <div class="listBox" id="companyBox"><div class="empty">Sélectionnez une réunion.</div></div>
-        </div>
+      <div style="margin-top:10px">
+        <div style="font-weight:900;margin-bottom:6px">Rappels ouverts à date cumulés par entreprise</div>
+        <div class="listBox" id="companyBox"><div class="empty">Sélectionnez une réunion.</div></div>
       </div>
     </div>
 
     <div class="card">
       <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap">
-        <div style="font-weight:1000">Chronologie / calendrier des rendus</div>
+        <div style="font-weight:1000">Calendrier / frise chronologique des rendus</div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <select id="filterArea" onchange="refreshDashboard()"><option value="">Toutes les zones</option></select>
           <select id="filterPackage" onchange="refreshDashboard()"><option value="">Tous les lots</option></select>
         </div>
       </div>
-      <div id="timeline" class="timeline" style="margin-top:10px"><div class="empty">Aucune donnée.</div></div>
+      <div id="timeline" class="gantt" style="margin-top:10px"><div class="empty">Aucune donnée.</div></div>
     </div>
 
     <div class="card">
@@ -2089,23 +2092,34 @@ async function refreshDashboard(){{
   document.getElementById('kpiRem').textContent = data.kpis?.open_reminders ?? 0;
   document.getElementById('kpiFol').textContent = data.kpis?.open_followups ?? 0;
   document.getElementById('kpiDate').textContent = data.reference_date || '-';
-  renderRows('ownerBox', data.kpis?.owners || [], 'owner', 'count');
   renderRows('companyBox', data.kpis?.company_cumulative || [], 'name', 'count');
 
   const timelineEl = document.getElementById('timeline');
   const timeline = data.timeline || [];
   if(!timeline.length){{
-    timelineEl.innerHTML = '<div class="empty">Aucun rendu avec date selon les filtres.</div>';
+    timelineEl.innerHTML = '<div class="empty">Aucun rendu daté selon les filtres.</div>';
   }} else {{
-    timelineEl.innerHTML = timeline.map(it => `
-      <div class="tItem">
-        <div class="tTop">
-          <strong>${{it.deadline_txt || it.deadline || ''}} • ${{it.title || '(Sans titre)'}}</strong>
-          <span class="badge ${{it.status==='rappel'?'b-rappel':(it.status==='a_suivre'?'b-suivre':'b-clos')}}">${{it.status==='rappel'?'Rappel':(it.status==='a_suivre'?'À suivre':'Clos')}}</span>
-        </div>
-        <div class="small">Zone: ${{it.area || 'Général'}} • Lot: ${{it.package || 'Sans lot'}} • Entreprise: ${{it.company || 'Non renseigné'}}</div>
+    const months = data.calendar?.months || [];
+    const monthHtml = months.map(m => `<div class="gMonth">${{m}}</div>`).join('');
+    const rowsHtml = timeline.map(it => {{
+      const left = Math.max(0, Math.min(100, Number(it.left_pct || 0)));
+      const width = Math.max(1.2, Math.min(100, Number(it.width_pct || 1.2)));
+      const label = `${{it.start_txt || ''}} → ${{it.end_txt || ''}}`;
+      return `
+        <div class="gRow">
+          <div class="gLabel" title="${{it.title || ''}}">${{it.title || '(Sans titre)'}} <span class="small">• ${{it.area || 'Général'}} • ${{it.package || 'Sans lot'}} • ${{it.company || 'Non renseigné'}}</span></div>
+          <div class="gTrack">
+            <div class="gBar ${{it.status || 'a_suivre'}}" style="left:${{left}}%;width:${{width}}%" title="${{label}}">${{label}}</div>
+          </div>
+        </div>`;
+    }}).join('');
+    timelineEl.innerHTML = `
+      <div class="gHead">
+        <div class="small">Sujet / périmètre</div>
+        <div class="gMonths">${{monthHtml}}</div>
       </div>
-    `).join('');
+      ${{rowsHtml}}
+    `;
   }}
 
   fillSelect('filterArea', data.filters?.areas || [], area, 'Toutes les zones');
@@ -3507,13 +3521,6 @@ def api_home_meeting_dashboard(
         rem_df = reminders_for_project(project_title=project, ref_date=ref_date, max_level=8)
         fol_df = followups_for_project(project_title=project, ref_date=ref_date, exclude_entry_ids=set())
 
-        owner_counts = []
-        if not rem_df.empty:
-            owner_series = _series(rem_df, E_COL_OWNER, "").fillna("").astype(str).str.strip()
-            owner_series = owner_series.replace("", "Non attribué")
-            for name, count in owner_series.value_counts().head(8).items():
-                owner_counts.append({"owner": str(name), "count": int(count)})
-
         company_counts = reminders_by_company(rem_df)
 
         entries = get_entries().copy()
@@ -3533,23 +3540,56 @@ def api_home_meeting_dashboard(
             entries = entries.loc[entries["__package_list__"].astype(str) == package].copy()
 
         timeline = []
+        calendar_months: List[str] = []
         if not entries.empty:
             entries["__completed__"] = _series(entries, E_COL_COMPLETED, False).apply(_bool_true)
             entries["__company__"] = _series(entries, E_COL_COMPANY_TASK, "").fillna("").astype(str).str.strip()
             entries["__company__"] = entries["__company__"].replace("", "Non renseigné")
+            entries["__start__"] = _series(entries, E_COL_CREATED, None).apply(_parse_date_any)
+            entries["__start__"] = entries.apply(
+                lambda r: r["__start__"] if r["__start__"] is not None else r["__deadline__"] - timedelta(days=7), axis=1
+            )
             entries = entries.sort_values("__deadline__", ascending=True)
-            for _, r in entries.head(80).iterrows():
-                deadline = r.get("__deadline__")
+
+            min_start = entries["__start__"].min()
+            max_end = entries["__deadline__"].max()
+            if min_start is None or max_end is None:
+                min_start = ref_date - timedelta(days=30)
+                max_end = ref_date + timedelta(days=120)
+            if min_start > max_end:
+                min_start, max_end = max_end, min_start
+            total_days = max(1, (max_end - min_start).days + 1)
+
+            months_cursor = date(min_start.year, min_start.month, 1)
+            month_limit = date(max_end.year, max_end.month, 1)
+            while months_cursor <= month_limit:
+                calendar_months.append(months_cursor.strftime("%b-%y"))
+                if months_cursor.month == 12:
+                    months_cursor = date(months_cursor.year + 1, 1, 1)
+                else:
+                    months_cursor = date(months_cursor.year, months_cursor.month + 1, 1)
+
+            for _, r in entries.head(100).iterrows():
+                d_start = r.get("__start__")
+                d_end = r.get("__deadline__")
+                if d_start is None or d_end is None:
+                    continue
                 is_open = not bool(r.get("__completed__", False))
                 status = "clos"
-                if is_open and deadline and deadline < ref_date:
+                if is_open and d_end < ref_date:
                     status = "rappel"
                 elif is_open:
                     status = "a_suivre"
+                left_pct = ((d_start - min_start).days / total_days) * 100
+                width_pct = (max(1, (d_end - d_start).days + 1) / total_days) * 100
                 timeline.append({
                     "title": str(r.get(E_COL_TITLE, "") or "").strip(),
-                    "deadline": deadline.isoformat() if deadline else "",
-                    "deadline_txt": _fmt_date(deadline),
+                    "start": d_start.isoformat(),
+                    "end": d_end.isoformat(),
+                    "start_txt": _fmt_date(d_start),
+                    "end_txt": _fmt_date(d_end),
+                    "left_pct": round(left_pct, 2),
+                    "width_pct": round(width_pct, 2),
                     "area": str(r.get("__area_list__", "Général")),
                     "package": str(r.get("__package_list__", "Sans lot")),
                     "company": str(r.get("__company__", "Non renseigné")),
@@ -3564,10 +3604,10 @@ def api_home_meeting_dashboard(
             "kpis": {
                 "open_reminders": int(len(rem_df)),
                 "open_followups": int(len(fol_df)),
-                "owners": owner_counts,
                 "company_cumulative": company_counts,
             },
             "timeline": timeline,
+            "calendar": {"months": calendar_months},
             "filters": {"areas": area_options, "packages": package_options},
             "ai_summary_by_area": ai_summary,
             "reference_date": ref_date.isoformat(),
