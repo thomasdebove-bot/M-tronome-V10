@@ -1933,6 +1933,181 @@ def render_home(project: Optional[str] = None, print_mode: bool = False) -> str:
 
     tempo_logo = _logo_data_url(LOGO_TEMPO_PATH)
     logo_html = f"<img src='{tempo_logo}' alt='TEMPO' class='homeLogo' />" if tempo_logo else "<div class='homeLogoText'>TEMPO</div>"
+    home_script = r"""
+function onProjectChange(){
+  const p = document.getElementById('project').value || "";
+  const url = p ? `/?project=${encodeURIComponent(p)}` : "/";
+  window.location.href = url;
+}
+
+function openCR(){
+  const meetingEl = document.getElementById('meeting');
+  const projectEl = document.getElementById('project');
+  if(!meetingEl){ alert("Champ réunion introuvable"); return; }
+  const mid = meetingEl.value || "";
+  if(!mid){ alert("Choisis une réunion."); return; }
+  const p = projectEl ? (projectEl.value || "") : "";
+  const url = `/cr?meeting_id=${encodeURIComponent(mid)}&project=${encodeURIComponent(p)}&print=1`;
+  window.location.href = url;
+}
+
+function renderRows(targetId, rows, leftKey, rightKey){
+  const box = document.getElementById(targetId);
+  if(!box) return;
+  if(!rows || !rows.length){ box.innerHTML = '<div class="empty">Aucune donnée.</div>'; return; }
+  box.innerHTML = rows.map(r => `<div class="row"><div>${r[leftKey]||''}</div><strong>${r[rightKey]||0}</strong></div>`).join('');
+}
+
+function fillSelect(id, options, selectedValue, allLabel){
+  const el = document.getElementById(id);
+  if(!el) return;
+  const base = `<option value="">${allLabel}</option>`;
+  const opts = (options || []).map(v => `<option value="${v}" ${v===selectedValue?'selected':''}>${v}</option>`).join('');
+  el.innerHTML = base + opts;
+}
+
+function _addDaysIso(iso, days){
+  if(!iso) return "";
+  const d = new Date(iso + "T00:00:00");
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0,10);
+}
+
+function timelineTicks(startIso, endIso, zoom){
+  const out = [];
+  if(!startIso || !endIso) return out;
+  let cur = new Date(startIso + "T00:00:00");
+  const end = new Date(endIso + "T00:00:00");
+  if(zoom === 'month'){
+    cur = new Date(cur.getFullYear(), cur.getMonth(), 1);
+    while(cur <= end){
+      out.push({ iso: cur.toISOString().slice(0,10), label: cur.toLocaleDateString('fr-FR',{month:'short',year:'2-digit'}) });
+      cur = new Date(cur.getFullYear(), cur.getMonth()+1, 1);
+    }
+  } else if(zoom === 'week'){
+    const day = cur.getDay();
+    const diff = (day === 0 ? -6 : 1 - day);
+    cur.setDate(cur.getDate() + diff);
+    while(cur <= end){
+      const weekLabel = `S${Math.ceil((((cur - new Date(cur.getFullYear(),0,1)) / 86400000) + new Date(cur.getFullYear(),0,1).getDay()+1)/7)}`;
+      out.push({ iso: cur.toISOString().slice(0,10), label: `${weekLabel} ${String(cur.getFullYear()).slice(2)}` });
+      cur.setDate(cur.getDate()+7);
+    }
+  } else {
+    while(cur <= end){
+      out.push({ iso: cur.toISOString().slice(0,10), label: cur.toLocaleDateString('fr-FR',{day:'2-digit',month:'2-digit'}) });
+      cur.setDate(cur.getDate()+1);
+    }
+  }
+  return out;
+}
+
+function applyTimelineFocus(){
+  const viewport = document.getElementById('timelineViewport');
+  const timelineRoot = document.getElementById('timelineRoot');
+  const focus = document.getElementById('timelineFocus')?.value || 'today';
+  if(!viewport || !timelineRoot) return;
+  const pxPerDay = Number(timelineRoot.dataset.pxPerDay || 6);
+  const startIso = timelineRoot.dataset.start || '';
+  if(!startIso) return;
+
+  let targetIso = startIso;
+  if(focus === 'today') targetIso = new Date().toISOString().slice(0,10);
+  else if(focus === 'p1') targetIso = _addDaysIso(new Date().toISOString().slice(0,10), 30);
+  else if(focus === 'p3') targetIso = _addDaysIso(new Date().toISOString().slice(0,10), 90);
+  else if(focus === 'p6') targetIso = _addDaysIso(new Date().toISOString().slice(0,10), 180);
+  else if(focus === 'end') targetIso = timelineRoot.dataset.end || startIso;
+
+  const start = new Date(startIso + 'T00:00:00');
+  const target = new Date(targetIso + 'T00:00:00');
+  const days = Math.max(0, Math.floor((target - start) / 86400000));
+  viewport.scrollLeft = Math.max(0, days * pxPerDay - 80);
+}
+
+function renderTimeline(data){
+  const timelineEl = document.getElementById('timeline');
+  if(!timelineEl) return;
+  const timeline = data?.timeline || [];
+  if(!timeline.length){
+    timelineEl.innerHTML = '<div class="empty">Aucun rendu daté selon les filtres.</div>';
+    return;
+  }
+  const zoom = document.getElementById('timelineZoom')?.value || 'week';
+  const pxMap = { month: 2, week: 7, day: 22 };
+  const pxPerDay = pxMap[zoom] || 7;
+  const cal = data?.calendar || {};
+  const startIso = cal.start || timeline[0]?.start || '';
+  const endIso = cal.end || timeline[timeline.length-1]?.end || startIso;
+  const totalDays = Math.max(1, Number(cal.total_days || 1));
+  const totalWidth = Math.max(900, totalDays * pxPerDay);
+  const ticks = timelineTicks(startIso, endIso, zoom);
+
+  const startDate = new Date(startIso + 'T00:00:00');
+  const ticksHtml = ticks.map(t => {
+    const td = new Date(t.iso + 'T00:00:00');
+    const offDays = Math.max(0, Math.floor((td - startDate)/86400000));
+    const left = offDays * pxPerDay;
+    return `<div class="gTick" style="left:${left}px">${t.label}</div>`;
+  }).join('');
+
+  const rowsHtml = timeline.map(it => {
+    const left = Math.max(0, Number(it.offset_days || 0) * pxPerDay);
+    const width = Math.max(8, Number(it.duration_days || 1) * pxPerDay);
+    const label = `${it.start_txt || ''} → ${it.end_txt || ''}`;
+    return `
+      <div class="gRow">
+        <div class="gLabel" title="${it.title || ''}">${it.title || '(Sans titre)'} <span class="small">• ${it.area || 'Général'} • ${it.package || 'Sans lot'} • ${it.company || 'Non renseigné'}</span></div>
+        <div class="gTrack" style="width:${totalWidth}px">
+          <div class="gBar ${it.status || 'a_suivre'}" style="left:${left}px;width:${width}px" title="${label}">${label}</div>
+        </div>
+      </div>`;
+  }).join('');
+
+  timelineEl.innerHTML = `
+    <div class="gViewport" id="timelineViewport">
+      <div class="gTop" id="timelineRoot" data-start="${startIso}" data-end="${endIso}" data-px-per-day="${pxPerDay}">
+        <div class="gTopLeft">Sujet / périmètre</div>
+        <div class="gTopRight" style="width:${totalWidth}px"><div class="gTicks">${ticksHtml}</div></div>
+      </div>
+      <div class="gBody">${rowsHtml}</div>
+    </div>`;
+
+  applyTimelineFocus();
+}
+
+async function refreshDashboard(){
+  const meeting = document.getElementById('meeting')?.value || '';
+  const project = document.getElementById('project')?.value || '';
+  const area = document.getElementById('filterArea')?.value || '';
+  const pack = document.getElementById('filterPackage')?.value || '';
+  const status = document.getElementById('filterStatus')?.value || 'open';
+  if(!meeting) return;
+  const url = `/api/home_meeting_dashboard?meeting_id=${encodeURIComponent(meeting)}&project=${encodeURIComponent(project)}&area=${encodeURIComponent(area)}&package=${encodeURIComponent(pack)}&status_filter=${encodeURIComponent(status)}`;
+  const res = await fetch(url);
+  const data = await res.json();
+  if(data.error){ console.error(data.error); return; }
+  window.__homeDashboardData = data;
+
+  document.getElementById('kpiRem').textContent = data.kpis?.open_reminders ?? 0;
+  document.getElementById('kpiFol').textContent = data.kpis?.open_followups ?? 0;
+  document.getElementById('kpiDate').textContent = data.reference_date || '-';
+  renderRows('companyBox', data.kpis?.company_cumulative || [], 'name', 'count');
+
+  renderTimeline(data);
+
+  fillSelect('filterArea', data.filters?.areas || [], area, 'Toutes les zones');
+  fillSelect('filterPackage', data.filters?.packages || [], pack, 'Tous les lots');
+
+  const ai = data.ai_summary_by_area || {};
+  const aiEl = document.getElementById('aiSummary');
+  const keys = Object.keys(ai);
+  aiEl.innerHTML = keys.length
+    ? keys.map(k => `<div class="row" style="align-items:flex-start"><strong>${k}</strong><div style="max-width:78%">${ai[k]}</div></div>`).join('')
+    : '<div class="empty">Pas de synthèse disponible pour ces filtres.</div>';
+}
+
+window.addEventListener('DOMContentLoaded', refreshDashboard);
+"""
     return f"""
 <!doctype html>
 <html lang="fr">
@@ -1967,15 +2142,18 @@ select{{width:100%;padding:12px 12px;border-radius:12px;border:1px solid var(--b
 .b-rappel{{background:#fee2e2;color:var(--late)}}
 .b-suivre{{background:#ffedd5;color:var(--warn)}}
 .b-clos{{background:#dcfce7;color:var(--ok)}}
-.gantt{{border:1px solid var(--border);border-radius:12px;background:#fff;overflow:auto;padding:10px}}
-.gHead{{display:grid;grid-template-columns:220px 1fr;gap:8px;align-items:end;margin-bottom:8px}}
-.gMonths{{display:flex;border:1px solid var(--border);border-radius:8px;overflow:hidden}}
-.gMonth{{padding:6px 8px;border-right:1px solid var(--border);font-size:11px;font-weight:900;background:#f8fafc;white-space:nowrap;min-width:88px;text-align:center}}
-.gMonth:last-child{{border-right:none}}
-.gRow{{display:grid;grid-template-columns:220px 1fr;gap:8px;align-items:center;margin-bottom:6px}}
-.gLabel{{font-size:12px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
-.gTrack{{position:relative;height:28px;border:1px solid #dbe3ef;border-radius:8px;background:repeating-linear-gradient(to right,#fff,#fff 79px,#f8fafc 79px,#f8fafc 80px)}}
-.gBar{{position:absolute;height:20px;top:3px;border-radius:6px;padding:1px 8px;font-size:11px;font-weight:900;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;border:1px solid rgba(15,23,42,.25)}}
+.gantt{{border:1px solid var(--border);border-radius:12px;background:#fff;padding:10px;overflow:hidden}}
+.gViewport{{overflow:auto;border:1px solid var(--border);border-radius:10px}}
+.gTop{{display:grid;grid-template-columns:320px 1fr;min-width:max-content;position:sticky;top:0;z-index:2;background:#fff}}
+.gTopLeft{{padding:8px 10px;font-size:12px;font-weight:900;border-right:1px solid var(--border)}}
+.gTopRight{{position:relative;height:34px;border-bottom:1px solid var(--border);background:#f8fafc}}
+.gTicks{{position:relative;height:100%}}
+.gTick{{position:absolute;top:0;bottom:0;border-left:1px solid #cbd5e1;font-size:10px;font-weight:900;color:#334155;padding-left:4px;display:flex;align-items:center;white-space:nowrap;background:rgba(248,250,252,.65)}}
+.gBody{{min-width:max-content}}
+.gRow{{display:grid;grid-template-columns:320px 1fr;min-width:max-content}}
+.gLabel{{padding:6px 10px;font-size:12px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-right:1px solid #e2e8f0;border-bottom:1px solid #f1f5f9;background:#fff;position:sticky;left:0;z-index:1}}
+.gTrack{{position:relative;height:30px;border-bottom:1px solid #f1f5f9;background:repeating-linear-gradient(to right,#fff,#fff 47px,#f8fafc 47px,#f8fafc 48px)}}
+.gBar{{position:absolute;height:20px;top:4px;border-radius:6px;padding:1px 8px;font-size:11px;font-weight:900;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;border:1px solid rgba(15,23,42,.25)}}
 .gBar.rappel{{background:#fecaca;color:#7f1d1d}}
 .gBar.a_suivre{{background:#fed7aa;color:#7c2d12}}
 .gBar.clos{{background:#bbf7d0;color:#14532d}}
@@ -2034,6 +2212,24 @@ select{{width:100%;padding:12px 12px;border-radius:12px;border:1px solid var(--b
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <select id="filterArea" onchange="refreshDashboard()"><option value="">Toutes les zones</option></select>
           <select id="filterPackage" onchange="refreshDashboard()"><option value="">Tous les lots</option></select>
+          <select id="filterStatus" onchange="refreshDashboard()">
+            <option value="open" selected>Sujets ouverts (rappels + à suivre)</option>
+            <option value="reminders">Rappels uniquement</option>
+            <option value="all">Tous (ouverts + clos)</option>
+          </select>
+          <select id="timelineZoom" onchange="renderTimeline(window.__homeDashboardData || null)">
+            <option value="month">Zoom mois</option>
+            <option value="week" selected>Zoom semaine</option>
+            <option value="day">Zoom jour</option>
+          </select>
+          <select id="timelineFocus" onchange="applyTimelineFocus()">
+            <option value="start">Vue début</option>
+            <option value="today" selected>Aujourd'hui</option>
+            <option value="p1">+1 mois</option>
+            <option value="p3">+3 mois</option>
+            <option value="p6">+6 mois</option>
+            <option value="end">Vue fin</option>
+          </select>
         </div>
       </div>
       <div id="timeline" class="gantt" style="margin-top:10px"><div class="empty">Aucune donnée.</div></div>
@@ -2045,96 +2241,7 @@ select{{width:100%;padding:12px 12px;border-radius:12px;border:1px solid var(--b
     </div>
   </div>
 
-<script>
-function onProjectChange(){{
-  const p = document.getElementById('project').value || "";
-  const url = p ? `/?project=${{encodeURIComponent(p)}}` : "/";
-  window.location.href = url;
-}}
-
-function openCR(){{
-  const meetingEl = document.getElementById('meeting');
-  const projectEl = document.getElementById('project');
-  if(!meetingEl){{ alert("Champ réunion introuvable"); return; }}
-  const mid = meetingEl.value || "";
-  if(!mid){{ alert("Choisis une réunion."); return; }}
-  const p = projectEl ? (projectEl.value || "") : "";
-  const url = `/cr?meeting_id=${{encodeURIComponent(mid)}}&project=${{encodeURIComponent(p)}}&print=1`;
-  window.location.href = url;
-}}
-
-function renderRows(targetId, rows, leftKey, rightKey){{
-  const box = document.getElementById(targetId);
-  if(!box) return;
-  if(!rows || !rows.length){{ box.innerHTML = '<div class="empty">Aucune donnée.</div>'; return; }}
-  box.innerHTML = rows.map(r => `<div class="row"><div>${{r[leftKey]||''}}</div><strong>${{r[rightKey]||0}}</strong></div>`).join('');
-}}
-
-function fillSelect(id, options, selectedValue, allLabel){{
-  const el = document.getElementById(id);
-  if(!el) return;
-  const base = `<option value="">${{allLabel}}</option>`;
-  const opts = (options || []).map(v => `<option value="${{v}}" ${{v===selectedValue?'selected':''}}>${{v}}</option>`).join('');
-  el.innerHTML = base + opts;
-}}
-
-async function refreshDashboard(){{
-  const meeting = document.getElementById('meeting')?.value || '';
-  const project = document.getElementById('project')?.value || '';
-  const area = document.getElementById('filterArea')?.value || '';
-  const pack = document.getElementById('filterPackage')?.value || '';
-  if(!meeting) return;
-  const url = `/api/home_meeting_dashboard?meeting_id=${{encodeURIComponent(meeting)}}&project=${{encodeURIComponent(project)}}&area=${{encodeURIComponent(area)}}&package=${{encodeURIComponent(pack)}}`;
-  const res = await fetch(url);
-  const data = await res.json();
-  if(data.error){{ console.error(data.error); return; }}
-
-  document.getElementById('kpiRem').textContent = data.kpis?.open_reminders ?? 0;
-  document.getElementById('kpiFol').textContent = data.kpis?.open_followups ?? 0;
-  document.getElementById('kpiDate').textContent = data.reference_date || '-';
-  renderRows('companyBox', data.kpis?.company_cumulative || [], 'name', 'count');
-
-  const timelineEl = document.getElementById('timeline');
-  const timeline = data.timeline || [];
-  if(!timeline.length){{
-    timelineEl.innerHTML = '<div class="empty">Aucun rendu daté selon les filtres.</div>';
-  }} else {{
-    const months = data.calendar?.months || [];
-    const monthHtml = months.map(m => `<div class="gMonth">${{m}}</div>`).join('');
-    const rowsHtml = timeline.map(it => {{
-      const left = Math.max(0, Math.min(100, Number(it.left_pct || 0)));
-      const width = Math.max(1.2, Math.min(100, Number(it.width_pct || 1.2)));
-      const label = `${{it.start_txt || ''}} → ${{it.end_txt || ''}}`;
-      return `
-        <div class="gRow">
-          <div class="gLabel" title="${{it.title || ''}}">${{it.title || '(Sans titre)'}} <span class="small">• ${{it.area || 'Général'}} • ${{it.package || 'Sans lot'}} • ${{it.company || 'Non renseigné'}}</span></div>
-          <div class="gTrack">
-            <div class="gBar ${{it.status || 'a_suivre'}}" style="left:${{left}}%;width:${{width}}%" title="${{label}}">${{label}}</div>
-          </div>
-        </div>`;
-    }}).join('');
-    timelineEl.innerHTML = `
-      <div class="gHead">
-        <div class="small">Sujet / périmètre</div>
-        <div class="gMonths">${{monthHtml}}</div>
-      </div>
-      ${{rowsHtml}}
-    `;
-  }}
-
-  fillSelect('filterArea', data.filters?.areas || [], area, 'Toutes les zones');
-  fillSelect('filterPackage', data.filters?.packages || [], pack, 'Tous les lots');
-
-  const ai = data.ai_summary_by_area || {{}};
-  const aiEl = document.getElementById('aiSummary');
-  const keys = Object.keys(ai);
-  aiEl.innerHTML = keys.length
-    ? keys.map(k => `<div class="row" style="align-items:flex-start"><strong>${{k}}</strong><div style="max-width:78%">${{ai[k]}}</div></div>`).join('')
-    : '<div class="empty">Pas de synthèse disponible pour ces filtres.</div>';
-}}
-
-window.addEventListener('DOMContentLoaded', refreshDashboard);
-</script>
+<script>{home_script}</script>
 
 </body>
 </html>
@@ -3512,6 +3619,7 @@ def api_home_meeting_dashboard(
     project: str = Query(default=""),
     area: str = Query(default=""),
     package: str = Query(default=""),
+    status_filter: str = Query(default="open"),
 ):
     try:
         mrow = meeting_row(meeting_id)
@@ -3540,9 +3648,20 @@ def api_home_meeting_dashboard(
             entries = entries.loc[entries["__package_list__"].astype(str) == package].copy()
 
         timeline = []
-        calendar_months: List[str] = []
+        cal_start = None
+        cal_end = None
+        total_days = 1
         if not entries.empty:
             entries["__completed__"] = _series(entries, E_COL_COMPLETED, False).apply(_bool_true)
+            if status_filter == "open":
+                entries = entries.loc[entries["__completed__"] == False].copy()
+            elif status_filter == "reminders":
+                entries = entries.loc[
+                    (entries["__completed__"] == False)
+                    & (entries["__deadline__"].notna())
+                    & (entries["__deadline__"] < ref_date)
+                ].copy()
+
             entries["__company__"] = _series(entries, E_COL_COMPANY_TASK, "").fillna("").astype(str).str.strip()
             entries["__company__"] = entries["__company__"].replace("", "Non renseigné")
             entries["__start__"] = _series(entries, E_COL_CREATED, None).apply(_parse_date_any)
@@ -3555,21 +3674,14 @@ def api_home_meeting_dashboard(
             max_end = entries["__deadline__"].max()
             if min_start is None or max_end is None:
                 min_start = ref_date - timedelta(days=30)
-                max_end = ref_date + timedelta(days=120)
+                max_end = ref_date + timedelta(days=180)
             if min_start > max_end:
                 min_start, max_end = max_end, min_start
+            cal_start = min_start
+            cal_end = max_end
             total_days = max(1, (max_end - min_start).days + 1)
 
-            months_cursor = date(min_start.year, min_start.month, 1)
-            month_limit = date(max_end.year, max_end.month, 1)
-            while months_cursor <= month_limit:
-                calendar_months.append(months_cursor.strftime("%b-%y"))
-                if months_cursor.month == 12:
-                    months_cursor = date(months_cursor.year + 1, 1, 1)
-                else:
-                    months_cursor = date(months_cursor.year, months_cursor.month + 1, 1)
-
-            for _, r in entries.head(100).iterrows():
+            for _, r in entries.head(120).iterrows():
                 d_start = r.get("__start__")
                 d_end = r.get("__deadline__")
                 if d_start is None or d_end is None:
@@ -3580,16 +3692,14 @@ def api_home_meeting_dashboard(
                     status = "rappel"
                 elif is_open:
                     status = "a_suivre"
-                left_pct = ((d_start - min_start).days / total_days) * 100
-                width_pct = (max(1, (d_end - d_start).days + 1) / total_days) * 100
                 timeline.append({
                     "title": str(r.get(E_COL_TITLE, "") or "").strip(),
                     "start": d_start.isoformat(),
                     "end": d_end.isoformat(),
                     "start_txt": _fmt_date(d_start),
                     "end_txt": _fmt_date(d_end),
-                    "left_pct": round(left_pct, 2),
-                    "width_pct": round(width_pct, 2),
+                    "offset_days": int((d_start - min_start).days),
+                    "duration_days": int(max(1, (d_end - d_start).days + 1)),
                     "area": str(r.get("__area_list__", "Général")),
                     "package": str(r.get("__package_list__", "Sans lot")),
                     "company": str(r.get("__company__", "Non renseigné")),
@@ -3607,7 +3717,11 @@ def api_home_meeting_dashboard(
                 "company_cumulative": company_counts,
             },
             "timeline": timeline,
-            "calendar": {"months": calendar_months},
+            "calendar": {
+                "start": cal_start.isoformat() if cal_start else "",
+                "end": cal_end.isoformat() if cal_end else "",
+                "total_days": int(total_days),
+            },
             "filters": {"areas": area_options, "packages": package_options},
             "ai_summary_by_area": ai_summary,
             "reference_date": ref_date.isoformat(),
