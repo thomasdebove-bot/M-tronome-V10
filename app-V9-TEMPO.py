@@ -2059,6 +2059,28 @@ function onScaleChange(){
   renderTimeline(window.__homeDashboardData || null);
 }
 
+function enableTimelineDragScroll(){
+  const viewport = document.getElementById('timelineViewport');
+  if(!viewport || viewport.dataset.dragBound === '1') return;
+  viewport.dataset.dragBound = '1';
+  let down = false;
+  let startX = 0;
+  let startLeft = 0;
+  viewport.addEventListener('mousedown', (e) => {
+    down = true;
+    startX = e.pageX;
+    startLeft = viewport.scrollLeft;
+    viewport.classList.add('dragging');
+  });
+  window.addEventListener('mouseup', () => { down = false; viewport.classList.remove('dragging'); });
+  viewport.addEventListener('mouseleave', () => { down = false; viewport.classList.remove('dragging'); });
+  viewport.addEventListener('mousemove', (e) => {
+    if(!down) return;
+    const dx = e.pageX - startX;
+    viewport.scrollLeft = startLeft - dx;
+  });
+}
+
 function renderTimeline(data){
   const timelineEl = document.getElementById('timeline');
   if(!timelineEl) return;
@@ -2073,11 +2095,17 @@ function renderTimeline(data){
   const cal = data?.calendar || {};
   const startIso = cal.start || timeline[0]?.start || '';
   const endIso = cal.end || timeline[timeline.length-1]?.end || startIso;
-  const totalDays = Math.max(1, Number(cal.total_days || 1));
-  const totalWidth = Math.max(900, totalDays * pxPerDay);
-  const ticks = timelineTicks(startIso, endIso, zoomMode, pxPerDay);
+  const baseTotalDays = Math.max(1, Number(cal.total_days || 1));
+  const padDays = zoomMode === 'day' ? 20 : (zoomMode === 'week' ? 35 : 60);
+  const viewStart = new Date(startIso + 'T00:00:00');
+  viewStart.setDate(viewStart.getDate() - padDays);
+  const viewEnd = new Date(endIso + 'T00:00:00');
+  viewEnd.setDate(viewEnd.getDate() + padDays);
+  const totalDays = Math.max(1, Math.floor((viewEnd - viewStart)/86400000) + 1);
+  const totalWidth = Math.max(1800, totalDays * pxPerDay);
+  const ticks = timelineTicks(viewStart.toISOString().slice(0,10), viewEnd.toISOString().slice(0,10), zoomMode, pxPerDay);
 
-  const startDate = new Date(startIso + 'T00:00:00');
+  const startDate = viewStart;
   const ticksHtml = ticks.map(t => {
     const td = new Date(t.iso + 'T00:00:00');
     const nd = new Date((t.next_iso || t.iso) + 'T00:00:00');
@@ -2089,8 +2117,8 @@ function renderTimeline(data){
   }).join('');
 
   const rowsHtml = timeline.map(it => {
-    const left = Math.max(0, Number(it.offset_days || 0) * pxPerDay);
-    const width = Math.max(8, Number(it.duration_days || 1) * pxPerDay);
+    const left = Math.max(0, (Number(it.offset_days || 0) + padDays) * pxPerDay);
+    const width = Math.max(16, Number(it.duration_days || 1) * pxPerDay);
     const perimeter = it.perimeter || it.area || 'Périmètre';
     const tip = it.title || perimeter;
     const cls = it.package_color || 'pkg-default';
@@ -2110,6 +2138,14 @@ function renderTimeline(data){
       </div>
       <div class="gBody">${rowsHtml}</div>
     </div>`;
+
+  const viewport = document.getElementById('timelineViewport');
+  if(viewport){
+    const first = timeline[0];
+    const targetLeft = Math.max(0, ((Number(first?.offset_days || 0) + padDays) * pxPerDay) - 120);
+    viewport.scrollLeft = targetLeft;
+  }
+  enableTimelineDragScroll();
 }
 
 async function refreshDashboard(){
@@ -2187,7 +2223,8 @@ select{{width:100%;padding:12px 12px;border-radius:12px;border:1px solid var(--b
 .timelineZoom input[type=range]{{width:110px}}
 .timelineZoomLabel{{font-size:12px;font-weight:900;color:var(--muted);min-width:100px}}
 .gantt{{border:1px solid var(--border);border-radius:12px;background:#fff;padding:10px;overflow:hidden}}
-.gViewport{{overflow:auto;border:1px solid var(--border);border-radius:10px}}
+.gViewport{{overflow-x:auto;overflow-y:hidden;border:1px solid var(--border);border-radius:10px;scrollbar-gutter:stable both-edges;cursor:grab}}
+.gViewport.dragging{{cursor:grabbing}}
 .gTop{{min-width:max-content;position:sticky;top:0;z-index:2;background:#fff}}
 .gTopRight{{position:relative;height:34px;border-bottom:1px solid var(--border);background:#f8fafc}}
 .gTicks{{position:relative;height:100%}}
