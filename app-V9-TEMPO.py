@@ -2081,6 +2081,35 @@ function enableTimelineDragScroll(){
   });
 }
 
+function currentWindowMode(){
+  return document.getElementById('timelineWindow')?.value || '3m';
+}
+
+function scrollTimelineToDate(dateIso){
+  const viewport = document.getElementById('timelineViewport');
+  const root = document.getElementById('timelineRoot');
+  if(!viewport || !root || !dateIso) return;
+  const startIso = root.dataset.viewStart || root.dataset.start || '';
+  const pxPerDay = Number(root.dataset.pxPerDay || 7);
+  if(!startIso) return;
+  const start = new Date(startIso + 'T00:00:00');
+  const target = new Date(dateIso + 'T00:00:00');
+  const days = Math.max(0, Math.floor((target - start)/86400000));
+  viewport.scrollLeft = Math.max(0, days * pxPerDay - 120);
+}
+
+function goToday(){
+  const todayIso = new Date().toISOString().slice(0,10);
+  scrollTimelineToDate(todayIso);
+}
+
+function goFirstReminder(){
+  const data = window.__homeDashboardData || {};
+  const timeline = data.timeline || [];
+  const first = timeline.find(it => it.status === 'rappel');
+  if(first && first.start){ scrollTimelineToDate(first.start); }
+}
+
 function renderTimeline(data){
   const timelineEl = document.getElementById('timeline');
   if(!timelineEl) return;
@@ -2095,14 +2124,34 @@ function renderTimeline(data){
   const cal = data?.calendar || {};
   const startIso = cal.start || timeline[0]?.start || '';
   const endIso = cal.end || timeline[timeline.length-1]?.end || startIso;
-  const baseTotalDays = Math.max(1, Number(cal.total_days || 1));
-  const padDays = zoomMode === 'day' ? 20 : (zoomMode === 'week' ? 35 : 60);
-  const viewStart = new Date(startIso + 'T00:00:00');
+  const padDays = zoomMode === 'day' ? 8 : (zoomMode === 'week' ? 18 : 30);
+  const baseStart = new Date(startIso + 'T00:00:00');
+  const baseEnd = new Date(endIso + 'T00:00:00');
+  const today = new Date();
+  today.setHours(0,0,0,0);
+  const windowMode = currentWindowMode();
+
+  let viewStart = new Date(baseStart);
+  let viewEnd = new Date(baseEnd);
+  if(windowMode === '4w'){
+    viewStart = new Date(today);
+    viewStart.setDate(viewStart.getDate() - 7);
+    viewEnd = new Date(today);
+    viewEnd.setDate(viewEnd.getDate() + 28);
+  } else if(windowMode === '3m'){
+    viewStart = new Date(today);
+    viewStart.setDate(viewStart.getDate() - 14);
+    viewEnd = new Date(today);
+    viewEnd.setDate(viewEnd.getDate() + 90);
+  }
+
+  if(viewStart > baseStart) viewStart = new Date(baseStart);
+  if(viewEnd < baseEnd) viewEnd = new Date(baseEnd);
   viewStart.setDate(viewStart.getDate() - padDays);
-  const viewEnd = new Date(endIso + 'T00:00:00');
   viewEnd.setDate(viewEnd.getDate() + padDays);
+
   const totalDays = Math.max(1, Math.floor((viewEnd - viewStart)/86400000) + 1);
-  const totalWidth = Math.max(1800, totalDays * pxPerDay);
+  const totalWidth = Math.max(2200, totalDays * pxPerDay);
   const ticks = timelineTicks(viewStart.toISOString().slice(0,10), viewEnd.toISOString().slice(0,10), zoomMode, pxPerDay);
 
   const startDate = viewStart;
@@ -2133,10 +2182,10 @@ function renderTimeline(data){
 
   timelineEl.innerHTML = `
     <div class="gViewport" id="timelineViewport">
-      <div class="gTop" id="timelineRoot" data-start="${startIso}" data-end="${endIso}" data-px-per-day="${pxPerDay}">
+      <div class="gTop" id="timelineRoot" data-start="${startIso}" data-end="${endIso}" data-view-start="${viewStart.toISOString().slice(0,10)}" data-px-per-day="${pxPerDay}">
         <div class="gTopRight" style="width:${totalWidth}px"><div class="gTicks">${ticksHtml}</div></div>
       </div>
-      <div class="gBody">${rowsHtml}</div>
+      <div class="gBody"><div class="todayLine" style="left:${Math.max(0, Math.floor((today - startDate)/86400000)*pxPerDay)}px"></div>${rowsHtml}</div>
     </div>`;
 
   const viewport = document.getElementById('timelineViewport');
@@ -2145,6 +2194,7 @@ function renderTimeline(data){
     const targetLeft = Math.max(0, ((Number(first?.offset_days || 0) + padDays) * pxPerDay) - 120);
     viewport.scrollLeft = targetLeft;
   }
+  if(windowMode !== 'all'){ goToday(); }
   enableTimelineDragScroll();
 }
 
@@ -2218,6 +2268,10 @@ select{{width:100%;padding:12px 12px;border-radius:12px;border:1px solid var(--b
 .b-clos{{background:#dcfce7;color:var(--ok)}}
 .timelineFilters{{display:flex;gap:8px;flex-wrap:wrap}}
 .timelineFilters select{{width:auto;min-width:160px;padding:8px 10px}}
+.btnLite{{border:1px solid var(--border);background:#fff;border-radius:10px;padding:8px 10px;font-weight:900;cursor:pointer}}
+.timelineLegend{{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}}
+.lg{{display:inline-flex;align-items:center;padding:4px 8px;border-radius:999px;font-size:11px;font-weight:900;border:1px solid rgba(15,23,42,.2)}}
+.lg.warn{{background:#fee2e2;color:#991b1b}}
 .timelineZoom{{display:inline-flex;align-items:center;gap:6px;padding:4px 8px;border:1px solid var(--border);border-radius:10px;background:#fff}}
 .timelineZoom button{{border:1px solid var(--border);background:#fff;border-radius:8px;width:26px;height:26px;font-weight:900;cursor:pointer}}
 .timelineZoom input[type=range]{{width:110px}}
@@ -2230,17 +2284,18 @@ select{{width:100%;padding:12px 12px;border-radius:12px;border:1px solid var(--b
 .gTicks{{position:relative;height:100%}}
 .gTick{{position:absolute;top:0;bottom:0;border-left:1px solid #cbd5e1;border-right:1px solid #e2e8f0;font-size:11px;font-weight:900;color:#334155;display:flex;align-items:center;justify-content:center;white-space:nowrap;background:rgba(248,250,252,.92);overflow:hidden}}
 .gTick span{{padding:0 6px;text-overflow:ellipsis;overflow:hidden}}
-.gBody{{min-width:max-content}}
+.gBody{{min-width:max-content;position:relative}}
+.todayLine{{position:absolute;top:0;bottom:0;width:2px;background:#dc2626;opacity:.9;z-index:1}}
 .gRow{{min-width:max-content}}
 .gTrack{{position:relative;height:32px;border-bottom:1px solid #f1f5f9;background:repeating-linear-gradient(to right,#fff,#fff 47px,#f8fafc 47px,#f8fafc 48px)}}
 .gBar{{position:absolute;height:22px;top:4px;border-radius:6px;padding:1px 8px;font-size:11px;font-weight:900;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;border:1px solid rgba(15,23,42,.28);color:#0b1220;display:flex;align-items:center;gap:6px}}
 .warnBlink{{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;border-radius:999px;background:#ef4444;color:#fff;font-size:10px;font-weight:1000;animation:blinkWarn 1s steps(2,start) infinite}}
 @keyframes blinkWarn{{to{{visibility:hidden}}}}
-.gBar.pkg-cvc{{background:#22d3ee}}
-.gBar.pkg-plb{{background:#ff00cc;color:#fff}}
-.gBar.pkg-ele{{background:#22c55e;color:#052e16}}
-.gBar.pkg-goe{{background:#7f1d1d;color:#fff}}
-.gBar.pkg-syn{{background:#f59e0b;color:#111827}}
+.gBar.pkg-cvc,.lg.pkg-cvc{{background:#22d3ee}}
+.gBar.pkg-plb,.lg.pkg-plb{{background:#ff00cc;color:#fff}}
+.gBar.pkg-ele,.lg.pkg-ele{{background:#22c55e;color:#052e16}}
+.gBar.pkg-goe,.lg.pkg-goe{{background:#7f1d1d;color:#fff}}
+.gBar.pkg-syn,.lg.pkg-syn{{background:#f59e0b;color:#111827}}
 .gBar.pkg-default{{background:#cbd5e1}}
 .small{{font-size:12px;color:var(--muted);font-weight:700}}
 .empty{{color:var(--muted);font-style:italic}}
@@ -2302,15 +2357,22 @@ select{{width:100%;padding:12px 12px;border-radius:12px;border:1px solid var(--b
             <option value="reminders">Rappels uniquement</option>
             <option value="all">Tous</option>
           </select>
+          <select id="timelineWindow" onchange="renderTimeline(window.__homeDashboardData || null)">
+            <option value="4w">Prochaines 4 semaines</option>
+            <option value="3m" selected>Prochains 3 mois</option>
+            <option value="all">Plage complète</option>
+          </select>
           <div class="timelineZoom">
             <button type="button" onclick="bumpZoom(-1)">−</button>
             <input id="timelineScale" type="range" min="0" max="3" step="1" value="2" oninput="onScaleChange()" />
             <button type="button" onclick="bumpZoom(1)">+</button>
             <span class="timelineZoomLabel" id="timelineScaleLabel">Échelle: semaine</span>
           </div>
+          <button type="button" class="btnLite" onclick="goToday()">Aujourd'hui</button>
+          <button type="button" class="btnLite" onclick="goFirstReminder()">Aller aux rappels</button>
         </div>
       </div>
-      <div id="timeline" class="gantt" style="margin-top:10px"><div class="empty">Aucune donnée.</div></div>
+      <div class="timelineLegend"><span class="lg pkg-cvc">CVC</span><span class="lg pkg-plb">PLB</span><span class="lg pkg-ele">ELE/CFA/CFO</span><span class="lg pkg-goe">GOE/STR</span><span class="lg pkg-syn">Synthèse</span><span class="lg warn">! Rappel</span></div><div id="timeline" class="gantt" style="margin-top:10px"><div class="empty">Aucune donnée.</div></div>
     </div>
 
     <div class="card">
