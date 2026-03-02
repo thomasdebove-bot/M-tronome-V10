@@ -872,7 +872,10 @@ def build_company_email_html(
     def td(val: str, center: bool = False, raw: bool = False) -> str:
         align = "center" if center else "left"
         body = str(val or "") if raw else _cell_text(val)
-        return f'<td style="border:1px solid #999;padding:6px;vertical-align:top;text-align:{align};">{body}</td>'
+        if center and not str(body).strip():
+            body = "&nbsp;"
+        extra = "white-space:nowrap;" if center else ""
+        return f'<td style="border:1px solid #999;padding:6px;vertical-align:top;text-align:{align};{extra}">{body}</td>'
 
     def tr(cells: list[str], raw_indices: Optional[set[int]] = None) -> str:
         raw_indices = raw_indices or set()
@@ -947,7 +950,14 @@ def build_company_email_html(
             row_html = tr([sujet, ecrit_le, pour_le, fait_le, concerne], raw_indices=raw_cols)
             rows_html.append(row_html)
 
-        table_html = '<table style="width:100%;border-collapse:collapse;border:1px solid #999;">' + header + '<tbody>' + ''.join(rows_html) + '</tbody></table>'
+        colgroup = (
+            '<col style="width:64%;" />'
+            '<col style="width:9%;" />'
+            '<col style="width:9%;" />'
+            '<col style="width:9%;" />'
+            '<col style="width:9%;" />'
+        )
+        table_html = '<table style="width:100%;table-layout:fixed;border-collapse:collapse;border:1px solid #999;">' + colgroup + header + '<tbody>' + ''.join(rows_html) + '</tbody></table>'
         html_parts.append(table_html)
         html_parts.append('<p>&nbsp;</p>')
 
