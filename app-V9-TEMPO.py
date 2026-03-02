@@ -4272,6 +4272,7 @@ def api_home_meeting_dashboard(
         fol_df = followups_for_project(project_title=project, ref_date=ref_date, exclude_entry_ids=set())
 
         company_counts = reminders_by_company(rem_df)
+        company_logo_map = companies_logo_by_name()
 
         entries = get_entries().copy()
         entries = entries.loc[entries[E_COL_PROJECT_TITLE].fillna("").astype(str).str.strip() == project].copy()
