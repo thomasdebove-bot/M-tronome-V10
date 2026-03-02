@@ -2612,17 +2612,17 @@ select{{width:100%;padding:12px 12px;border-radius:12px;border:1px solid var(--b
 .small{{font-size:12px;color:var(--muted);font-weight:700}}
 .empty{{color:var(--muted);font-style:italic}}
 
-.drawerOverlay{position:fixed;inset:0;background:rgba(15,23,42,.22);z-index:10040;opacity:0;pointer-events:none;transition:opacity .16s ease}
-.drawerOverlay.open{opacity:1;pointer-events:auto}
-.taskDrawer{position:fixed;top:0;right:0;height:100vh;width:min(460px,92vw);background:#fff;border-left:1px solid var(--border);box-shadow:-8px 0 28px rgba(2,6,23,.2);transform:translateX(100%);transition:transform .18s ease;display:flex;flex-direction:column}
-.drawerOverlay.open .taskDrawer{transform:translateX(0)}
-.drawerHead{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:14px 16px;border-bottom:1px solid var(--border);font-weight:1000}
-.drawerClose{border:1px solid var(--border);background:#fff;border-radius:10px;width:32px;height:32px;font-size:18px;font-weight:900;cursor:pointer}
-.drawerBody{padding:14px 16px;overflow:auto;display:grid;gap:10px}
-.drawerField{display:grid;gap:4px}
-.drawerLabel{font-size:12px;font-weight:900;color:var(--muted);text-transform:uppercase;letter-spacing:.02em}
-.drawerValue{font-weight:700;white-space:pre-wrap;word-break:break-word}
-body.drawerOpen{overflow:hidden}
+.drawerOverlay{{position:fixed;inset:0;background:rgba(15,23,42,.22);z-index:10040;opacity:0;pointer-events:none;transition:opacity .16s ease}}
+.drawerOverlay.open{{opacity:1;pointer-events:auto}}
+.taskDrawer{{position:fixed;top:0;right:0;height:100vh;width:min(460px,92vw);background:#fff;border-left:1px solid var(--border);box-shadow:-8px 0 28px rgba(2,6,23,.2);transform:translateX(100%);transition:transform .18s ease;display:flex;flex-direction:column}}
+.drawerOverlay.open .taskDrawer{{transform:translateX(0)}}
+.drawerHead{{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:14px 16px;border-bottom:1px solid var(--border);font-weight:1000}}
+.drawerClose{{border:1px solid var(--border);background:#fff;border-radius:10px;width:32px;height:32px;font-size:18px;font-weight:900;cursor:pointer}}
+.drawerBody{{padding:14px 16px;overflow:auto;display:grid;gap:10px}}
+.drawerField{{display:grid;gap:4px}}
+.drawerLabel{{font-size:12px;font-weight:900;color:var(--muted);text-transform:uppercase;letter-spacing:.02em}}
+.drawerValue{{font-weight:700;white-space:pre-wrap;word-break:break-word}}
+body.drawerOpen{{overflow:hidden}}
 
 </style>
 </head>
