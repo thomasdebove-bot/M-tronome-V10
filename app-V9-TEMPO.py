@@ -2061,15 +2061,17 @@ function onScaleChange(){
 
 function enableTimelineDragScroll(){
   const viewport = document.getElementById('timelineViewport');
-  if(!viewport || viewport.dataset.dragBound === '1') return;
+  const primary = timelineScrollElements()[0];
+  if(!viewport || !primary || viewport.dataset.dragBound === '1') return;
   viewport.dataset.dragBound = '1';
   let down = false;
   let startX = 0;
   let startLeft = 0;
   viewport.addEventListener('mousedown', (e) => {
+    if(e.target.closest('.gBar,[data-drawer-close],.timelineSplitter,button,a,input,select,label')) return;
     down = true;
     startX = e.pageX;
-    startLeft = viewport.scrollLeft;
+    startLeft = primary.scrollLeft;
     viewport.classList.add('dragging');
   });
   window.addEventListener('mouseup', () => { down = false; viewport.classList.remove('dragging'); });
@@ -2077,8 +2079,90 @@ function enableTimelineDragScroll(){
   viewport.addEventListener('mousemove', (e) => {
     if(!down) return;
     const dx = e.pageX - startX;
-    viewport.scrollLeft = startLeft - dx;
+    setTimelineScrollLeft(startLeft - dx);
   });
+}
+
+function escHtml(v){
+  return String(v ?? '').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'", '&#39;');
+}
+
+function drawerValue(v){
+  const txt = String(v ?? '').trim();
+  return txt || '—';
+}
+
+function closeTimelineDrawer(){
+  const overlay = document.getElementById('taskDrawerOverlay');
+  if(!overlay) return;
+  overlay.classList.remove('open');
+  overlay.setAttribute('aria-hidden', 'true');
+  document.body.classList.remove('drawerOpen');
+}
+
+function openTimelineDrawer(task){
+  const overlay = document.getElementById('taskDrawerOverlay');
+  if(!overlay) return;
+  const setText = (id, value) => {
+    const el = document.getElementById(id);
+    if(el) el.textContent = drawerValue(value);
+  };
+  setText('drawerTaskId', task.task_id);
+  setText('drawerTaskTitle', task.title);
+  setText('drawerTaskArea', task.area);
+  setText('drawerTaskPackage', task.package);
+  setText('drawerTaskStart', task.start_txt);
+  setText('drawerTaskEnd', task.end_txt);
+  setText('drawerTaskStatus', task.status);
+  setText('drawerTaskOwner', task.owner);
+  setText('drawerTaskComment', task.comment);
+  overlay.classList.add('open');
+  overlay.setAttribute('aria-hidden', 'false');
+  document.body.classList.add('drawerOpen');
+}
+
+function bindTimelineDrawer(){
+  const overlay = document.getElementById('taskDrawerOverlay');
+  if(!overlay || overlay.dataset.bound === '1') return;
+  overlay.dataset.bound = '1';
+  overlay.addEventListener('click', (e) => {
+    if(e.target.dataset.drawerClose === '1' || e.target === overlay) closeTimelineDrawer();
+  });
+  window.addEventListener('keydown', (e) => {
+    if(e.key === 'Escape') closeTimelineDrawer();
+  });
+}
+
+function bindTimelineBarClicks(){
+  document.querySelectorAll('.gBar[data-task-id]').forEach((bar) => {
+    bar.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      openTimelineDrawer({
+        task_id: bar.dataset.taskId,
+        title: bar.dataset.taskTitle,
+        area: bar.dataset.taskArea,
+        package: bar.dataset.taskPackage,
+        start_txt: bar.dataset.taskStart,
+        end_txt: bar.dataset.taskEnd,
+        status: bar.dataset.taskStatus,
+        owner: bar.dataset.taskOwner,
+        comment: bar.dataset.taskComment,
+      });
+    });
+  });
+}
+
+
+function timelineScrollElements(){
+  const viewport = document.getElementById('timelineViewport');
+  if(!viewport) return [];
+  return Array.from(viewport.querySelectorAll('[data-role="time-scroll"]'));
+}
+
+function setTimelineScrollLeft(left){
+  const els = timelineScrollElements();
+  els.forEach((el) => { el.scrollLeft = Math.max(0, left); });
 }
 
 function currentWindowMode(){
@@ -2086,16 +2170,17 @@ function currentWindowMode(){
 }
 
 function scrollTimelineToDate(dateIso){
-  const viewport = document.getElementById('timelineViewport');
   const root = document.getElementById('timelineRoot');
-  if(!viewport || !root || !dateIso) return;
+  if(!root || !dateIso) return;
   const startIso = root.dataset.viewStart || root.dataset.start || '';
   const pxPerDay = Number(root.dataset.pxPerDay || 7);
   if(!startIso) return;
   const start = new Date(startIso + 'T00:00:00');
   const target = new Date(dateIso + 'T00:00:00');
   const days = Math.max(0, Math.floor((target - start)/86400000));
-  viewport.scrollLeft = Math.max(0, days * pxPerDay - (viewport.clientWidth * 0.45));
+  const viewport = document.getElementById('timelineViewport');
+  const widthRef = viewport ? viewport.clientWidth : 1200;
+  setTimelineScrollLeft(Math.max(0, days * pxPerDay - (widthRef * 0.45)));
 }
 
 function goToday(){
@@ -2222,6 +2307,26 @@ function bindTimelineTooltips(){
   });
 }
 
+function bindTimelineHorizontalSync(){
+  const viewport = document.getElementById('timelineViewport');
+  if(!viewport) return;
+  const synced = Array.from(viewport.querySelectorAll('[data-role="time-scroll"]'));
+  if(!synced.length) return;
+  const primary = synced[0];
+  if(primary.dataset.syncBound === '1') return;
+  primary.dataset.syncBound = '1';
+  let lock = false;
+  synced.forEach((el) => {
+    el.addEventListener('scroll', () => {
+      if(lock) return;
+      lock = true;
+      const left = el.scrollLeft;
+      synced.forEach((other) => { if(other !== el) other.scrollLeft = left; });
+      lock = false;
+    });
+  });
+}
+
 function renderTimeline(data){
   const timelineEl = document.getElementById('timeline');
   if(!timelineEl) return;
@@ -2311,16 +2416,17 @@ function renderTimeline(data){
       const detail = compact
         ? ''
         : `<div class="gMeta"><div>Responsable : ${it.owner || 'Non attribué'}</div><div>Échéance : ${it.end_txt || '-'}</div><div>${isLate ? 'Retard' : 'Restant'} : ${diff===null?'n/a':Math.abs(diff)+'j'}</div></div>`;
+      const rowModeCls = compact ? 'compact' : 'detailed';
       return `
-        <div class="gRow ${dState}">
+        <div class="gRow ${dState} ${rowModeCls}">
           <div class="gItemCol">
             <div class="gTitleLine">${statusIcon}<span class="gTitle" title="${taskTitle.replaceAll('"','&quot;')}">${taskTitle}</span></div>
             ${detail}
           </div>
-          <div class="gTrack" style="width:${totalWidth}px">
-            <div class="gBar ${cls} ${meetingFx}" style="left:${left}px;width:${width}px" data-tip="${tip.replaceAll('"','&quot;')}">
+          <div class="gTrack" data-role="time-scroll"><div style="width:${totalWidth}px;height:100%;position:relative">
+            <div class="gBar ${cls} ${meetingFx}" style="left:${left}px;width:${width}px" data-tip="${tip.replaceAll('"','&quot;')}" data-task-id="${escHtml(it.task_id)}" data-task-title="${escHtml(taskTitle)}" data-task-area="${escHtml(it.area || '')}" data-task-package="${escHtml(it.package || '')}" data-task-start="${escHtml(it.start_txt || '')}" data-task-end="${escHtml(it.end_txt || '')}" data-task-status="${escHtml(it.status || '')}" data-task-owner="${escHtml(it.owner || '')}" data-task-comment="${escHtml(it.comment || '')}">
               <span class="barTitle">${taskTitle}</span>
-            </div>
+            </div></div>
           </div>
         </div>`;
     }).join('');
@@ -2346,7 +2452,7 @@ function renderTimeline(data){
   timelineEl.innerHTML = `
     <div class="gViewport" id="timelineViewport" style="--title-col-width:320px">
       <div class="gTop" id="timelineRoot" data-start="${startIso}" data-end="${endIso}" data-view-start="${viewStart.toISOString().slice(0,10)}" data-px-per-day="${pxPerDay}">
-        <div class="gTopRight" style="width:${totalWidth}px"><div class="gTicks">${ticksHtml}</div></div>
+        <div class="gTopLeft">Tâches</div><div class="gTopRight" data-role="time-scroll"><div class="gTicks" style="width:${totalWidth}px">${ticksHtml}</div></div>
       </div>
       <div class="gBody"><div id="timelineSplitGuide" class="splitGuide"></div>
         <div class="meetingBg" style="left:${Math.max(0, meetLeft-8)}px"></div><div class="meetingLine" style="left:${meetLeft}px"><span>Réunion</span></div>
@@ -2359,11 +2465,14 @@ function renderTimeline(data){
   const viewport = document.getElementById('timelineViewport');
   if(viewport){
     const targetLeft = Math.max(0, meetLeft - (viewport.clientWidth * 0.45));
-    viewport.scrollLeft = targetLeft;
+    setTimelineScrollLeft(targetLeft);
   }
   enableTimelineDragScroll();
   bindTimelineTooltips();
   bindTimelineResizer();
+  bindTimelineDrawer();
+  bindTimelineBarClicks();
+  bindTimelineHorizontalSync();
 }
 
 async function refreshDashboard(){
@@ -2447,8 +2556,8 @@ select{{width:100%;padding:12px 12px;border-radius:12px;border:1px solid var(--b
 .timelineZoom button{{border:1px solid var(--border);background:#fff;border-radius:8px;width:26px;height:26px;font-weight:900;cursor:pointer}}
 .timelineZoom input[type=range]{{width:110px}}
 .timelineZoomLabel{{font-size:12px;font-weight:900;color:var(--muted);min-width:100px}}
-.gantt{{border:1px solid var(--border);border-radius:12px;background:#fff;padding:10px;overflow:hidden}}
-.gViewport{{overflow:auto;max-height:64vh;border:1px solid var(--border);border-radius:10px;scrollbar-gutter:stable both-edges;cursor:grab;scroll-behavior:smooth;position:relative}}
+.gantt{{border:1px solid var(--border);border-radius:12px;background:#fff;padding:10px;overflow:hidden;position:relative}}
+.gViewport{{overflow-y:auto;overflow-x:hidden;max-height:64vh;border:1px solid var(--border);border-radius:10px;scrollbar-gutter:stable both-edges;position:relative}}
 .gViewport.dragging{{cursor:grabbing}}
 .timelineSplitter{{position:absolute;top:34px;bottom:0;width:6px;cursor:col-resize;z-index:6;background:transparent;transition:background .15s ease}}
 .timelineSplitter:hover{{background:rgba(15,23,42,.08)}}
@@ -2456,22 +2565,25 @@ select{{width:100%;padding:12px 12px;border-radius:12px;border:1px solid var(--b
 .gViewport.resizing .splitGuide{{display:block}}
 .gViewport.resizing .timelineSplitter{{background:rgba(15,23,42,.12)}}
 @media (max-width:1199px){{.timelineSplitter,.splitGuide{{display:none!important}}.gViewport{{--title-col-width:300px!important}}}}
-.gTop{{min-width:max-content;position:sticky;top:0;z-index:2;background:#fff}}
-.gTopRight{{position:relative;height:34px;border-bottom:1px solid var(--border);background:#f8fafc}}
+.gTop{{position:sticky;top:0;z-index:5;background:#fff;display:grid;grid-template-columns:var(--title-col-width,320px) minmax(0,1fr)}}
+.gTopLeft{{position:sticky;left:0;z-index:6;background:#fff;border-bottom:1px solid var(--border);border-right:1px solid #eef2f7;padding:7px 10px;font-weight:900}}
+.gTopRight{{position:relative;height:34px;border-bottom:1px solid var(--border);background:#f8fafc;overflow-x:auto;overflow-y:hidden}}
 .gTicks{{position:relative;height:100%}}
 .gTick{{position:absolute;top:0;bottom:0;border-left:1px solid #cbd5e1;border-right:1px solid #e2e8f0;font-size:11px;font-weight:900;color:#334155;display:flex;align-items:center;justify-content:center;white-space:nowrap;background:rgba(248,250,252,.92);overflow:hidden}}
 .gTick span{{padding:0 6px;text-overflow:ellipsis;overflow:hidden}}
-.gBody{{min-width:max-content;position:relative}}
+.gBody{{position:relative}}
 .todayLine{{position:absolute;top:0;bottom:0;width:2px;background:#dc2626;opacity:.9;z-index:1}}
-.gRow{{min-width:max-content;display:grid;grid-template-columns:var(--title-col-width,320px) 1fr;align-items:center}}
-.gItemCol{{position:sticky;left:0;z-index:4;background:#fff;border-right:1px solid #eef2f7;padding:6px 10px;height:100%}}
+.gRow{{display:grid;grid-template-columns:var(--title-col-width,320px) minmax(0,1fr);align-items:stretch;min-height:34px}}
+.gItemCol{{position:sticky;left:0;z-index:4;background:#fff;border-right:1px solid #eef2f7;padding:6px 10px;height:100%;display:flex;flex-direction:column;justify-content:center}}
 .gTitleLine{{display:flex;align-items:center;gap:6px;min-width:0}}
-.gTitle{{font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block}}
+.gTitle{{font-size:14px;font-weight:600;display:-webkit-box;-webkit-box-orient:vertical;overflow:hidden;line-height:1.2;word-break:break-word}}
+.gRow.compact .gTitle{{-webkit-line-clamp:2}}
+.gRow.detailed .gTitle{{-webkit-line-clamp:3}}
 .sevIcon{{font-size:13px;line-height:1;color:#dc2626}}
-.gTrack{{position:relative;height:34px;border-bottom:1px solid #f8fafc;background:repeating-linear-gradient(to right,#fff,#fff 239px,#fcfdff 239px,#fcfdff 240px)}}
+.gTrack{{position:relative;height:100%;min-height:34px;border-bottom:1px solid #f8fafc;background:repeating-linear-gradient(to right,#fff,#fff 239px,#fcfdff 239px,#fcfdff 240px);overflow-x:auto;overflow-y:hidden}}
 .gSection:nth-child(even) .gRow .gTrack{{border-bottom-color:transparent}}
 .gSection{{margin-bottom:6px}}
-.gSectionHead{{display:flex;align-items:center;gap:8px;width:100%;text-align:left;border:0;background:#f8fafc;border-bottom:1px solid #e2e8f0;padding:7px 10px;font-weight:900;position:sticky;left:0;z-index:2}}
+.gSectionHead{{display:flex;align-items:center;gap:8px;width:100%;text-align:left;border:0;background:#f8fafc;border-bottom:1px solid #e2e8f0;padding:7px 10px;font-weight:900;position:sticky;left:0;z-index:6}}
 .zoneSignal{{margin-left:auto;font-size:12px;font-weight:900}}
 .gBar{{position:absolute;min-height:26px;height:26px;top:4px;border-radius:6px;padding:2px 8px;font-size:12px;font-weight:700;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;border:1px solid rgba(15,23,42,.28);color:#0b1220;display:flex;align-items:center;box-shadow:0 1px 4px rgba(15,23,42,.08);transform-origin:center;transition:transform .15s ease, box-shadow .15s ease}}
 .gBar:hover{{transform:translateY(-1px);box-shadow:0 4px 10px rgba(15,23,42,.12)}}
@@ -2499,6 +2611,19 @@ select{{width:100%;padding:12px 12px;border-radius:12px;border:1px solid var(--b
 .meetingLine span{{position:sticky;top:2px;display:inline-block;transform:translateX(6px);background:#0ea5e9;color:#fff;font-size:10px;font-weight:900;padding:2px 6px;border-radius:999px}}
 .small{{font-size:12px;color:var(--muted);font-weight:700}}
 .empty{{color:var(--muted);font-style:italic}}
+
+.drawerOverlay{position:fixed;inset:0;background:rgba(15,23,42,.22);z-index:10040;opacity:0;pointer-events:none;transition:opacity .16s ease}
+.drawerOverlay.open{opacity:1;pointer-events:auto}
+.taskDrawer{position:fixed;top:0;right:0;height:100vh;width:min(460px,92vw);background:#fff;border-left:1px solid var(--border);box-shadow:-8px 0 28px rgba(2,6,23,.2);transform:translateX(100%);transition:transform .18s ease;display:flex;flex-direction:column}
+.drawerOverlay.open .taskDrawer{transform:translateX(0)}
+.drawerHead{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:14px 16px;border-bottom:1px solid var(--border);font-weight:1000}
+.drawerClose{border:1px solid var(--border);background:#fff;border-radius:10px;width:32px;height:32px;font-size:18px;font-weight:900;cursor:pointer}
+.drawerBody{padding:14px 16px;overflow:auto;display:grid;gap:10px}
+.drawerField{display:grid;gap:4px}
+.drawerLabel{font-size:12px;font-weight:900;color:var(--muted);text-transform:uppercase;letter-spacing:.02em}
+.drawerValue{font-weight:700;white-space:pre-wrap;word-break:break-word}
+body.drawerOpen{overflow:hidden}
+
 </style>
 </head>
 <body>
@@ -2579,6 +2704,24 @@ select{{width:100%;padding:12px 12px;border-radius:12px;border:1px solid var(--b
       <div style="font-weight:1000;margin-bottom:8px">Résumé IA des sujets à suivre par zone / périmètre</div>
       <div id="aiSummary" class="listBox"><div class="empty">Sélectionnez une réunion.</div></div>
     </div>
+  </div>
+
+
+  <div id="taskDrawerOverlay" class="drawerOverlay" aria-hidden="true">
+    <aside class="taskDrawer" role="dialog" aria-modal="true" aria-label="Détail tâche">
+      <div class="drawerHead"><span>Détail tâche</span><button type="button" class="drawerClose" data-drawer-close="1" aria-label="Fermer">×</button></div>
+      <div class="drawerBody">
+        <div class="drawerField"><div class="drawerLabel">ID</div><div id="drawerTaskId" class="drawerValue">—</div></div>
+        <div class="drawerField"><div class="drawerLabel">Titre</div><div id="drawerTaskTitle" class="drawerValue">—</div></div>
+        <div class="drawerField"><div class="drawerLabel">Zone</div><div id="drawerTaskArea" class="drawerValue">—</div></div>
+        <div class="drawerField"><div class="drawerLabel">Lot</div><div id="drawerTaskPackage" class="drawerValue">—</div></div>
+        <div class="drawerField"><div class="drawerLabel">Date début</div><div id="drawerTaskStart" class="drawerValue">—</div></div>
+        <div class="drawerField"><div class="drawerLabel">Date fin</div><div id="drawerTaskEnd" class="drawerValue">—</div></div>
+        <div class="drawerField"><div class="drawerLabel">Statut</div><div id="drawerTaskStatus" class="drawerValue">—</div></div>
+        <div class="drawerField"><div class="drawerLabel">Responsable</div><div id="drawerTaskOwner" class="drawerValue">—</div></div>
+        <div class="drawerField"><div class="drawerLabel">Commentaires</div><div id="drawerTaskComment" class="drawerValue">—</div></div>
+      </div>
+    </aside>
   </div>
 
 <script>{home_script}</script>
