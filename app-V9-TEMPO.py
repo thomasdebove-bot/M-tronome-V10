@@ -902,13 +902,13 @@ def build_company_email_html(
     html_parts: List[str] = []
     html_parts.append('<html><body style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#111;line-height:1.4;">')
     html_parts.append('<p>Bonjour,</p>')
-    html_parts.append(f"<p>Veuillez trouver ci-après la liste des sujets ouverts déployés à la date du {escape(ref_txt)} sur l'application METRONOME pour les entreprises sélectionnées.</p>")
+    html_parts.append(f"<p>Veuillez trouver ci-après la liste des sujets ouverts déployés à la date du {escape(ref_txt)} sur l'application METRONOME pour les entreprises sélectionnées:</p>")
     html_parts.append('<p>&nbsp;</p>')
 
     rappels_lines = [f"{co} : {cnt} rappel(s)" for co, cnt in sorted(reminders_by_company.items(), key=lambda kv: _norm_name(kv[0])) if int(cnt) >= 1]
     if not rappels_lines:
         rappels_lines = ["Aucun rappel"]
-    html_parts.append('<p><b><u>Rappels en cours :</u></b><br/>' + '<br/>'.join(_cell_text(x) for x in rappels_lines) + '</p>')
+    html_parts.append('<p>' + '<br/>'.join(_cell_text(x) for x in rappels_lines) + '</p>')
 
     for area in sorted(area_map.keys(), key=lambda x: _norm_name(x)):
         rows = sorted(
