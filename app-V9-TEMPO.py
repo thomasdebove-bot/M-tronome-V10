@@ -836,6 +836,10 @@ def _clean_area_name(area: str) -> str:
     return txt or "Généralité"
 
 
+def _target_companies_phrase(selected_count: int) -> str:
+    return "l'entreprise suivante" if int(selected_count or 0) == 1 else "les entreprises suivantes"
+
+
 def build_company_email_html(
     meeting: dict,
     company: dict,
@@ -903,8 +907,8 @@ def build_company_email_html(
     html_parts.append('<html><body style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#111;line-height:1.4;">')
     html_parts.append('<p>Bonjour,</p>')
     selected_company_count = int(meeting.get("selected_company_count") or 0)
-    ent_label = "entreprise suivante" if selected_company_count == 1 else "entreprises suivantes"
-    html_parts.append(f"<p>Veuillez trouver ci-après la liste des sujets ouverts déployés à la date du {escape(ref_txt)} sur l'application METRONOME pour les {ent_label}:</p>")
+    target_phrase = _target_companies_phrase(selected_company_count)
+    html_parts.append(f"<p>Veuillez trouver ci-après la liste des sujets ouverts déployés à la date du {escape(ref_txt)} sur l'application METRONOME pour {target_phrase}:</p>")
     rappels_lines = [
         f"<b>{_cell_text(co)}</b> : {_cell_text(str(cnt))} {'rappel' if int(cnt) == 1 else 'rappels'} en cours"
         for co, cnt in sorted(reminders_by_company.items(), key=lambda kv: _norm_name(kv[0]))
@@ -5321,9 +5325,9 @@ def api_meeting_company_mail_draft(
             meeting_date=meeting_date,
             app_url="https://app.atelier-tempo.fr",
         )
-        ent_label_txt = "entreprise suivante" if len(target_companies) == 1 else "entreprises suivantes"
+        target_phrase_txt = _target_companies_phrase(len(target_companies))
         text_fallback = (
-            f"Bonjour,\n\nVeuillez trouver ci-après la liste des sujets ouverts déployés à la date du {_fmt_mail_date(date.today())} sur l'application METRONOME pour les {ent_label_txt}.\n"
+            f"Bonjour,\n\nVeuillez trouver ci-après la liste des sujets ouverts déployés à la date du {_fmt_mail_date(date.today())} sur l'application METRONOME pour {target_phrase_txt}.\n"
             "(Version texte. Utiliser le HTML pour un rendu complet.)"
         )
         return {
