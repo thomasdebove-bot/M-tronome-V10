@@ -2622,6 +2622,13 @@ function _uniqueCompaniesFromDashboard(){
   return Array.from(new Set(merged)).sort((a,b) => a.localeCompare(b,'fr'));
 }
 
+function toggleMailCompanyMode(){
+  const sel = document.getElementById('mailCompanySelect');
+  const allChk = document.getElementById('mailAllCompanies');
+  if(!sel || !allChk) return;
+  sel.disabled = !!allChk.checked;
+}
+
 function openCompanyMailModal(){
   const modal = document.getElementById('mailModal');
   const sel = document.getElementById('mailCompanySelect');
@@ -2630,11 +2637,15 @@ function openCompanyMailModal(){
   const companies = _uniqueCompaniesFromDashboard();
   sel.innerHTML = companies.map(c => `<option value="${c}">${c}</option>`).join('');
   if(allChk) allChk.checked = true;
+  toggleMailCompanyMode();
   const rec = document.getElementById('mailRecipients');
   const body = document.getElementById('mailBody');
+  const details = document.getElementById('mailRecipientDetails');
   if(rec) rec.value = '';
   if(body) body.value = '';
+  if(details) details.textContent = '';
   modal.style.display = 'flex';
+  generateCompanyMailDraft();
 }
 
 function closeCompanyMailModal(){
@@ -2661,8 +2672,14 @@ async function generateCompanyMailDraft(){
   if(data.error){ alert(data.error); return; }
   const rec = document.getElementById('mailRecipients');
   const body = document.getElementById('mailBody');
+  const details = document.getElementById('mailRecipientDetails');
   if(rec) rec.value = (data.recipients || []).join('; ');
   if(body) body.value = data.draft_text || '';
+  if(details){
+    const byCo = data.recipients_by_company || {};
+    const keys = Object.keys(byCo);
+    details.textContent = keys.length ? keys.map(k => `${k}: ${(byCo[k] || []).join(', ') || 'aucun email'}`).join('\n') : 'Aucun email trouvé pour la sélection.';
+  }
 }
 
 function copyMailDraft(){
@@ -2714,7 +2731,13 @@ async function refreshDashboard(){
   `;
 }
 
-window.addEventListener('DOMContentLoaded', refreshDashboard);
+window.addEventListener('DOMContentLoaded', () => {
+  const allChk = document.getElementById('mailAllCompanies');
+  const sel = document.getElementById('mailCompanySelect');
+  if(allChk) allChk.addEventListener('change', () => { toggleMailCompanyMode(); generateCompanyMailDraft(); });
+  if(sel) sel.addEventListener('change', generateCompanyMailDraft);
+  refreshDashboard();
+});
 """
     return f"""
 <!doctype html>
@@ -2834,11 +2857,14 @@ select{{width:100%;padding:12px 12px;border-radius:12px;border:1px solid var(--b
 .small{{font-size:12px;color:var(--muted);font-weight:700}}
 .empty{{color:var(--muted);font-style:italic}}
 .mailModal{{position:fixed;inset:0;background:rgba(0,0,0,.35);display:none;align-items:center;justify-content:center;z-index:10050}}
-.mailPanel{{background:#fff;width:min(900px,94vw);max-height:92vh;overflow:auto;border:1px solid var(--border);border-radius:14px;box-shadow:0 20px 50px rgba(2,6,23,.2);padding:14px}}
-.mailGrid{{display:grid;grid-template-columns:1fr 1fr;gap:10px}}
+.mailPanel{{background:#fff;width:min(1180px,96vw);max-height:94vh;overflow:auto;border:1px solid var(--border);border-radius:14px;box-shadow:0 20px 50px rgba(2,6,23,.2);padding:14px}}
+.mailGrid{{display:grid;grid-template-columns:minmax(240px,32%) minmax(420px,68%);gap:12px}}
 .mailField{{display:grid;gap:6px}}
 .mailField label{{margin:0;font-size:12px;color:var(--muted)}}
 .mailField textarea,.mailField select{{width:100%;padding:10px;border-radius:10px;border:1px solid var(--border);font:13px/1.4 system-ui,-apple-system,Segoe UI,Roboto,Arial;}}
+#mailCompanySelect{{height:190px}}
+#mailBody{{min-height:420px}}
+#mailRecipientDetails{{white-space:pre-wrap;font-size:12px;color:var(--muted);background:var(--soft);border:1px solid var(--border);border-radius:10px;padding:8px;max-height:140px;overflow:auto}}
 .mailActions{{display:flex;gap:8px;justify-content:flex-end;margin-top:10px;flex-wrap:wrap}}
 
 
@@ -2971,13 +2997,14 @@ body.drawerOpen{{overflow:hidden}}
       <div class="mailGrid">
         <div class="mailField">
           <label><input id="mailAllCompanies" type="checkbox" checked /> Toutes les entreprises (sinon sélection multiple)</label>
-          <select id="mailCompanySelect" multiple size="10"></select>
+          <select id="mailCompanySelect" multiple></select>
         </div>
         <div class="mailField">
           <label>Destinataires (emails)</label>
           <textarea id="mailRecipients" rows="4" placeholder="emails détectés automatiquement"></textarea>
+          <div id="mailRecipientDetails"></div>
           <label>Texte mail prêt à copier-coller</label>
-          <textarea id="mailBody" rows="14"></textarea>
+          <textarea id="mailBody" rows="20"></textarea>
         </div>
       </div>
       <div class="mailActions">
@@ -4744,7 +4771,7 @@ def api_meeting_company_mail_draft(
         if project:
             edf = edf.loc[_series(edf, E_COL_PROJECT_TITLE, "").fillna("").astype(str).str.strip() == project].copy()
         if edf.empty:
-            return {"meeting_id": meeting_id, "recipients": [], "draft_text": "Aucune donnée de réunion."}
+            return {"meeting_id": meeting_id, "recipients": [], "recipients_by_company": {}, "draft_text": "Aucune donnée de réunion."}
 
         edf["__company__"] = _series(edf, E_COL_COMPANY_TASK, "").fillna("").astype(str).str.strip().replace("", "Non renseigné")
         selected = [x.strip() for x in str(companies or "").split(",") if x.strip()]
@@ -4753,60 +4780,84 @@ def api_meeting_company_mail_draft(
             edf = edf.loc[edf["__company__"].astype(str).apply(lambda v: _norm_name(v) in sel_norm)].copy()
 
         if edf.empty:
-            return {"meeting_id": meeting_id, "recipients": [], "draft_text": "Aucune donnée pour les entreprises sélectionnées."}
+            return {"meeting_id": meeting_id, "recipients": [], "recipients_by_company": {}, "draft_text": "Aucune donnée pour les entreprises sélectionnées."}
 
+        edf = _explode_areas(edf)
         edf["__is_task__"] = _series(edf, E_COL_IS_TASK, False).apply(_bool_true)
         edf["__deadline__"] = _series(edf, E_COL_DEADLINE, None).apply(_parse_date_any)
+        edf["__created__"] = _series(edf, E_COL_CREATED, None).apply(_parse_date_any)
         edf["__completed__"] = _series(edf, E_COL_COMPLETED, False).apply(_bool_true)
 
         emails_map = companies_email_by_name()
-        recipients = sorted({mail for c in edf["__company__"].astype(str).tolist() for mail in emails_map.get(_norm_name(c), [])})
+        recipients_by_company = {
+            comp: emails_map.get(_norm_name(comp), [])
+            for comp in sorted({str(c) for c in edf["__company__"].astype(str).tolist()})
+        }
+        recipients = sorted({mail for vals in recipients_by_company.values() for mail in vals})
 
-        lines = []
-        lines.append(f"Réunion: {meeting_id}")
-        lines.append(f"Projet: {project}")
-        lines.append(f"Date réunion: {meet_date.isoformat()}")
-        lines.append(f"Date de génération: {today_ref.isoformat()}")
-        lines.append("")
+        def _line_task(r) -> str:
+            t = str(r.get(E_COL_TITLE, "") or "").strip() or "(sans titre)"
+            area = str(r.get("__area_list__", "") or "").strip() or "Général"
+            owner = str(r.get(E_COL_OWNER, "") or "").strip() or "Non attribué"
+            dl = _fmt_date(r.get("__deadline__")) or "—"
+            cr = _fmt_date(r.get("__created__")) or "—"
+            st = str(r.get(E_COL_STATUS, "") or "").strip() or "—"
+            cmt = str(r.get(E_COL_TASK_COMMENT_TEXT, "") or "").strip()
+            base = f"  • [{area}] {t} | propriétaire: {owner} | créé: {cr} | échéance: {dl} | statut: {st}"
+            return base + (f" | commentaire: {cmt}" if cmt else "")
 
-        for comp, g in edf.groupby("__company__", dropna=False):
-            tasks = g.loc[g["__is_task__"] == True].copy()
-            memos = g.loc[g["__is_task__"] == False].copy()
-            reminders = tasks.loc[(tasks["__completed__"] == False) & (tasks["__deadline__"].notna()) & (tasks["__deadline__"] < today_ref)].copy()
-            opened = tasks.loc[tasks["__completed__"] == False].copy()
-            closed = tasks.loc[tasks["__completed__"] == True].copy()
+        def _line_memo(r) -> str:
+            t = str(r.get(E_COL_TITLE, "") or "").strip() or "(sans titre)"
+            area = str(r.get("__area_list__", "") or "").strip() or "Général"
+            owner = str(r.get(E_COL_OWNER, "") or "").strip() or "Non attribué"
+            cmt = str(r.get(E_COL_TASK_COMMENT_TEXT, "") or "").strip()
+            base = f"  • [{area}] {t} | auteur: {owner}"
+            return base + (f" | commentaire: {cmt}" if cmt else "")
 
-            lines.append(f"=== {comp} ===")
-            lines.append(f"- KPI: {len(opened)} ouverte(s) | {len(closed)} clôturée(s) | {len(reminders)} rappel(s) | {len(memos)} mémo(s)")
+        lines = [
+            f"Réunion: {meeting_id}",
+            f"Projet: {project}",
+            f"Date réunion: {meet_date.isoformat()}",
+            f"Date de génération: {today_ref.isoformat()}",
+            "",
+        ]
 
-            if not reminders.empty:
-                lines.append("- Rappels:")
-                for _, r in reminders.head(15).iterrows():
-                    t = str(r.get(E_COL_TITLE, "") or "").strip()
-                    dl = _fmt_date(r.get("__deadline__"))
-                    lines.append(f"  • {t} (échéance: {dl or '—'})")
+        for comp, g_comp in edf.groupby("__company__", dropna=False):
+            lines.append(f"=== ENTREPRISE: {comp} ===")
+            lines.append(f"Destinataires détectés: {', '.join(recipients_by_company.get(str(comp), [])) or 'aucun'}")
+            for perimeter, g_per in g_comp.groupby("__area_list__", dropna=False):
+                tasks = g_per.loc[g_per["__is_task__"] == True].copy()
+                memos = g_per.loc[g_per["__is_task__"] == False].copy()
+                reminders = tasks.loc[(tasks["__completed__"] == False) & (tasks["__deadline__"].notna()) & (tasks["__deadline__"] < today_ref)].copy()
+                closed = tasks.loc[tasks["__completed__"] == True].copy()
+                open_all = tasks.loc[tasks["__completed__"] == False].copy()
+                new_open = open_all.loc[open_all["__created__"].notna() & (open_all["__created__"] >= meet_date)].copy()
+                open_regular = open_all.drop(new_open.index, errors='ignore')
 
-            if not opened.empty:
-                lines.append("- Tâches ouvertes:")
-                for _, r in opened.head(15).iterrows():
-                    t = str(r.get(E_COL_TITLE, "") or "").strip()
-                    dl = _fmt_date(r.get("__deadline__"))
-                    lines.append(f"  • {t} (échéance: {dl or '—'})")
+                lines.append(f"-- Périmètre: {perimeter if str(perimeter).strip() else 'Général'}")
+                lines.append(f"   KPI: ouverts={len(open_all)} | nouveaux={len(new_open)} | rappels={len(reminders)} | clôturés={len(closed)} | mémos={len(memos)}")
 
-            if not closed.empty:
-                lines.append("- Tâches clôturées:")
-                for _, r in closed.head(10).iterrows():
-                    t = str(r.get(E_COL_TITLE, "") or "").strip()
-                    dl = _fmt_date(r.get("__deadline__"))
-                    lines.append(f"  • {t} (échéance: {dl or '—'})")
-
-            if not memos.empty:
-                lines.append("- Mémos:")
-                for _, r in memos.head(10).iterrows():
-                    t = str(r.get(E_COL_TITLE, "") or "").strip()
-                    cmt = str(r.get(E_COL_TASK_COMMENT_TEXT, "") or "").strip()
-                    lines.append(f"  • {t}{(' — ' + cmt) if cmt else ''}")
-            lines.append("")
+                if not reminders.empty:
+                    lines.append("   Rappels:")
+                    for _, r in reminders.iterrows():
+                        lines.append(_line_task(r))
+                if not new_open.empty:
+                    lines.append("   Nouveaux ouverts:")
+                    for _, r in new_open.iterrows():
+                        lines.append(_line_task(r))
+                if not open_regular.empty:
+                    lines.append("   Ouverts:")
+                    for _, r in open_regular.iterrows():
+                        lines.append(_line_task(r))
+                if not closed.empty:
+                    lines.append("   Clôturés:")
+                    for _, r in closed.iterrows():
+                        lines.append(_line_task(r))
+                if not memos.empty:
+                    lines.append("   Mémos:")
+                    for _, r in memos.iterrows():
+                        lines.append(_line_memo(r))
+                lines.append("")
 
         draft_text = "\n".join(lines).strip()
         return {
@@ -4814,6 +4865,7 @@ def api_meeting_company_mail_draft(
             "project": project,
             "selected_companies": sorted({str(c) for c in edf["__company__"].astype(str).tolist()}),
             "recipients": recipients,
+            "recipients_by_company": recipients_by_company,
             "draft_text": draft_text,
         }
     except MissingDataError as err:
