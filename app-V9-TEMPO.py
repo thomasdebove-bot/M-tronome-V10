@@ -787,6 +787,142 @@ def _users_deployed_contacts_by_company(project_title: str) -> Dict[str, List[Di
 
 
 
+def _short_text(val: str, limit: int = 160) -> str:
+    txt = re.sub(r"\s+", " ", str(val or "").strip())
+    if len(txt) <= limit:
+        return txt
+    return txt[: max(0, limit - 1)].rstrip() + "…"
+
+
+def _fmt_mail_date(d: Optional[date]) -> str:
+    return d.strftime("%d/%m/%Y") if isinstance(d, date) else "/"
+
+
+def _split_companies_value(raw: str) -> List[str]:
+    vals = _split_multi_labels(str(raw or ""))
+    if vals:
+        return [v.strip() for v in vals if str(v).strip()]
+    out: List[str] = []
+    for part in re.split(r"[;,/|]+", str(raw or "")):
+        v = str(part or "").strip()
+        if v:
+            out.append(v)
+    return out
+
+
+def _companies_concerned_for_row(r: pd.Series, concern_cols: List[str]) -> List[str]:
+    out: List[str] = []
+    for col in concern_cols:
+        raw = str(r.get(col, "") or "").strip()
+        if not raw or raw.lower() == "nan":
+            continue
+        out.extend(_split_companies_value(raw))
+    uniq = []
+    seen = set()
+    for c in out:
+        n = _norm_name(c)
+        if n and n not in seen:
+            seen.add(n)
+            uniq.append(c)
+    return uniq
+
+
+def build_company_email_html(
+    meeting: dict,
+    company: dict,
+    items: list[dict],
+    meeting_date: date,
+    app_url: str = "https://app.atelier-tempo.fr"
+) -> tuple[str, str]:
+    """
+    returns (subject, html)
+    subject exemple: "CR Synthèse - {PROJECT_NAME} - Réunion du {DATE}"
+    """
+    project_name = str(meeting.get("project") or "").strip() or "Projet"
+    company_name = str(company.get("name") or "").strip() or "Entreprise"
+    meeting_txt = _fmt_mail_date(meeting_date)
+    subject = f"CR Synthèse - {project_name} - Réunion du {meeting_txt}"
+
+    def _rank(it: dict) -> int:
+        tp = str(it.get("type") or "").lower()
+        if tp == "reminder":
+            return 0
+        if tp == "open":
+            return 1
+        if tp == "done":
+            return 2
+        return 3
+
+    area_map: Dict[str, List[dict]] = {}
+    reminders_count = 0
+    for it in items:
+        area = str(it.get("area") or "Généralité").strip() or "Généralité"
+        area_map.setdefault(area, []).append(it)
+        if str(it.get("type") or "") == "reminder":
+            reminders_count += 1
+
+    html_parts = [
+        '<html><body style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#111;line-height:1.4;">',
+        '<p>Bonjour,</p>',
+        f'<p>Veuillez trouver ci-après les sujets listés en réunion du {meeting_txt}.</p>',
+        '<p>&nbsp;</p>',
+        '<p><b><u>Rappels en cours :</u></b><br/>',
+    ]
+    if reminders_count > 0:
+        html_parts.append(f'{_escape(company_name)} : {reminders_count} rappel(s)')
+    else:
+        html_parts.append('Aucun rappel')
+    html_parts.append('</p>')
+
+    for area in sorted(area_map.keys(), key=lambda x: _norm_name(x)):
+        rows = sorted(
+            area_map[area],
+            key=lambda it: (
+                _rank(it),
+                _fmt_mail_date(it.get("due_date")),
+                _fmt_mail_date(it.get("created_date")),
+                _norm_name(str(it.get("subject") or "")),
+            ),
+        )
+        if not rows:
+            continue
+
+        html_parts.append(f'<p><b><u>Périmètre { _escape(area) } :</u></b></p>')
+        html_parts.append('<table style="width:100%;border-collapse:collapse;border:1px solid #999;">')
+        html_parts.append('<thead><tr style="background:#efefef;">')
+        for th in ["Sujet", "Écrit le", "Pour le", "Fait le", "Concerne"]:
+            html_parts.append(f'<th style="border:1px solid #999;padding:6px;text-align:left;">{th}</th>')
+        html_parts.append('</tr></thead><tbody>')
+
+        for it in rows:
+            subject_txt = _escape(_short_text(str(it.get("subject") or "(sans titre)"), 160))
+            created_txt = _escape(_fmt_mail_date(it.get("created_date")))
+            due_txt = _escape(_fmt_mail_date(it.get("due_date"))) if str(it.get("type") or "") != "memo" else "/"
+            done_val = str(it.get("done_label") or "").strip() or "/"
+            concerne = ", ".join([str(x).strip() for x in (it.get("concerne") or []) if str(x).strip()]) or company_name
+            html_parts.append('<tr>')
+            html_parts.append(f'<td style="border:1px solid #999;padding:6px;">{subject_txt}</td>')
+            html_parts.append(f'<td style="border:1px solid #999;padding:6px;">{created_txt}</td>')
+            html_parts.append(f'<td style="border:1px solid #999;padding:6px;">{_escape(due_txt)}</td>')
+            html_parts.append(f'<td style="border:1px solid #999;padding:6px;">{_escape(done_val)}</td>')
+            html_parts.append(f'<td style="border:1px solid #999;padding:6px;">{_escape(concerne)}</td>')
+            html_parts.append('</tr>')
+
+        html_parts.append('</tbody></table>')
+        html_parts.append('<p>&nbsp;</p>')
+
+    html_parts.extend([
+        "<p><b>Téléchargez gratuitement l'application de gestion de projet METRONOME.</b><br/>",
+        "Celle-ci vous permettra de retrouver l'intégralité des réunions de synthèse, comptes rendu, planning et suivi des tâches depuis votre smartphone ou votre ordinateur.<br/>",
+        f'<a href="{_escape(app_url)}" target="_blank" rel="noopener">{_escape(app_url.replace("https://", "").replace("http://", ""))}</a></p>',
+        '<p>Vous en souhaitant bonne réception,</p>',
+        '</body></html>',
+    ])
+
+    html = "".join(html_parts)
+    return subject, html
+
+
 # -------------------------
 # PROJECT INFO
 # -------------------------
@@ -2833,30 +2969,26 @@ async function generateCompanyMailDraft(){
   const project = document.getElementById('project')?.value || '';
   if(!meeting){ alert('Choisis une réunion.'); return; }
   const companies = selectedCompaniesForMail();
-  const url = `/api/meeting_company_mail_draft?meeting_id=${encodeURIComponent(meeting)}&project=${encodeURIComponent(project)}&companies=${encodeURIComponent(companies.join(','))}`;
+  const allCompanies = (document.getElementById('mailAllCompanies')?.checked) ? '1' : '0';
+  const url = `/api/meeting_company_mail_draft?meeting_id=${encodeURIComponent(meeting)}&project=${encodeURIComponent(project)}&selected_companies=${encodeURIComponent(companies.join(','))}&all_companies=${allCompanies}`;
   const res = await fetch(url);
   const data = await res.json();
   if(data.error){ alert(data.error); return; }
   const rec = document.getElementById('mailRecipients');
   const body = document.getElementById('mailBody');
   const details = document.getElementById('mailRecipientDetails');
-  if(rec) rec.value = (data.recipients || []).join('; ');
-  if(body) body.value = data.draft_text || '';
+  if(rec) rec.value = (data.emails_detected || []).join('; ');
+  if(body) body.value = data.html || '';
   if(details){
-    const byCo = data.recipients_by_company || {};
+    const byCo = data.emails_by_company || {};
     const keys = Object.keys(byCo);
     details.textContent = keys.length ? keys.map(k => `${k}: ${(byCo[k] || []).join(', ') || 'aucun email'}`).join('\n') : 'Aucun email trouvé pour la sélection.';
   }
 }
 
 function copyMailDraft(){
-  const rec = document.getElementById('mailRecipients')?.value || '';
   const body = document.getElementById('mailBody')?.value || '';
-  const txt = `Destinataires:
-${rec}
-
-${body}`;
-  navigator.clipboard.writeText(txt).catch(()=>{});
+  navigator.clipboard.writeText(body).catch(()=>{});
 }
 
 async function refreshDashboard(){
@@ -3170,13 +3302,12 @@ body.drawerOpen{{overflow:hidden}}
           <label>Destinataires (emails)</label>
           <textarea id="mailRecipients" rows="4" placeholder="emails détectés automatiquement"></textarea>
           <div id="mailRecipientDetails"></div>
-          <label>Texte mail prêt à copier-coller</label>
+          <label>HTML mail prêt à copier-coller</label>
           <textarea id="mailBody" rows="20"></textarea>
         </div>
       </div>
       <div class="mailActions">
-        <button class="btnLite" type="button" onclick="generateCompanyMailDraft()">Générer brouillon</button>
-        <button class="btnLite" type="button" onclick="copyMailDraft()">Copier brouillon</button>
+        <button class="btnLite" type="button" onclick="copyMailDraft()">Copier HTML</button>
       </div>
     </div>
   </div>
@@ -4927,12 +5058,13 @@ def api_meeting_company_mail_draft(
     meeting_id: str = Query(...),
     project: str = Query(default=""),
     companies: str = Query(default=""),
+    selected_companies: str = Query(default=""),
+    all_companies: bool = Query(default=True),
 ):
     try:
         mrow = meeting_row(meeting_id)
         project = (project or str(mrow.get(M_COL_PROJECT_TITLE, ""))).strip()
-        meet_date = _parse_date_any(mrow.get(M_COL_DATE)) or date.today()
-        today_ref = date.today()
+        meeting_date = _parse_date_any(mrow.get(M_COL_DATE)) or date.today()
 
         meeting_df = entries_for_meeting(meeting_id).copy()
         if project:
@@ -4942,27 +5074,28 @@ def api_meeting_company_mail_draft(
         if project:
             all_project_df = all_project_df.loc[_series(all_project_df, E_COL_PROJECT_TITLE, "").fillna("").astype(str).str.strip() == project].copy()
         if all_project_df.empty:
-            return {"meeting_id": meeting_id, "recipients": [], "recipients_by_company": {}, "draft_text": "Aucune donnée projet."}
+            return {"emails_detected": [], "subject": "", "html": "", "text_fallback": "Aucune donnée projet."}
 
         all_project_df["__company__"] = _series(all_project_df, E_COL_COMPANY_TASK, "").fillna("").astype(str).str.strip().replace("", "Non renseigné")
-        selected = [x.strip() for x in str(companies or "").split(",") if x.strip()]
-        if selected:
-            sel_norm = {_norm_name(x) for x in selected}
-        else:
-            meeting_companies = sorted({str(c).strip() for c in _series(meeting_df, E_COL_COMPANY_TASK, "").fillna("").astype(str).tolist() if str(c).strip()})
-            sel_norm = {_norm_name(x) for x in meeting_companies}
-
-        if sel_norm:
-            all_project_df = all_project_df.loc[all_project_df["__company__"].astype(str).apply(lambda v: _norm_name(v) in sel_norm)].copy()
-
-        if all_project_df.empty:
-            return {"meeting_id": meeting_id, "recipients": [], "recipients_by_company": {}, "draft_text": "Aucune donnée pour les entreprises sélectionnées."}
-
         all_project_df = _explode_areas(all_project_df)
         all_project_df["__is_task__"] = _series(all_project_df, E_COL_IS_TASK, False).apply(_bool_true)
         all_project_df["__deadline__"] = _series(all_project_df, E_COL_DEADLINE, None).apply(_parse_date_any)
         all_project_df["__created__"] = _series(all_project_df, E_COL_CREATED, None).apply(_parse_date_any)
         all_project_df["__completed__"] = _series(all_project_df, E_COL_COMPLETED, False).apply(_bool_true)
+        all_project_df["__done_date__"] = _series(all_project_df, E_COL_COMPLETED_END, None).apply(_parse_date_any)
+
+        raw_selected = selected_companies or companies
+        selected = [x.strip() for x in str(raw_selected or "").split(",") if x.strip()]
+        if all_companies:
+            target_companies = sorted({str(c).strip() for c in all_project_df["__company__"].astype(str).tolist() if str(c).strip()})
+        elif selected:
+            sn = {_norm_name(x) for x in selected}
+            target_companies = sorted({str(c).strip() for c in all_project_df["__company__"].astype(str).tolist() if _norm_name(str(c)) in sn})
+        else:
+            target_companies = sorted({str(c).strip() for c in _series(meeting_df, E_COL_COMPANY_TASK, "").fillna("").astype(str).tolist() if str(c).strip()})
+
+        if not target_companies:
+            return {"emails_detected": [], "subject": "", "html": "", "text_fallback": "Aucune entreprise cible."}
 
         emails_map = companies_email_by_name()
         contacts_map = _contacts_by_company_name()
@@ -4970,9 +5103,7 @@ def api_meeting_company_mail_draft(
         users_contacts_map = _users_deployed_contacts_by_company(project)
 
         recipients_by_company: Dict[str, List[str]] = {}
-        recipients_details: Dict[str, List[str]] = {}
-
-        for comp in sorted({str(c) for c in all_project_df["__company__"].astype(str).tolist()}):
+        for comp in target_companies:
             key = _norm_name(comp)
             people_norm = {_norm_name(x) for x in deployed_people.get(key, [])}
             company_contacts = contacts_map.get(key, [])
@@ -4985,132 +5116,101 @@ def api_meeting_company_mail_draft(
                 if not em:
                     continue
                 nm_norm = _norm_name(nm)
-                if people_norm and nm_norm:
-                    if nm_norm in people_norm or any((pn and (pn in nm_norm or nm_norm in pn)) for pn in people_norm):
-                        matched_company_emails.append(em)
+                if people_norm and nm_norm and (nm_norm in people_norm or any((pn and (pn in nm_norm or nm_norm in pn)) for pn in people_norm)):
+                    matched_company_emails.append(em)
 
             users_emails = sorted({str(x.get("email", "") or "").strip().lower() for x in users_contacts if str(x.get("email", "") or "").strip()})
             base_emails = sorted({e.lower() for e in emails_map.get(key, []) if e})
+            recipients_by_company[comp] = sorted(set(matched_company_emails or users_emails or base_emails))
 
-            if matched_company_emails:
-                final_emails = sorted(set(matched_company_emails))
-                source = "contacts entreprise appariés aux personnes projet"
-            elif users_emails:
-                final_emails = users_emails
-                source = "USERS (personnes déployées projet)"
-            else:
-                final_emails = base_emails
-                source = "emails entreprise (fallback)"
-
-            recipients_by_company[comp] = final_emails
-
-            details: List[str] = []
-            if deployed_people.get(key):
-                details.append("personnes projet: " + ", ".join(deployed_people.get(key, [])))
-            if users_contacts:
-                users_names = sorted({str(x.get("name", "") or "").strip() for x in users_contacts if str(x.get("name", "") or "").strip()})
-                if users_names:
-                    details.append("contacts USERS: " + ", ".join(users_names))
-            details.append("source destinataires: " + source)
-            recipients_details[comp] = details
-
-        recipients = sorted({mail for vals in recipients_by_company.values() for mail in vals})
-
-        def _fmt_short(d: Optional[date]) -> str:
-            return d.strftime("%d/%m/%y") if isinstance(d, date) else "—"
-
-        def _line_task_row(r, company_name: str) -> str:
-            title = str(r.get(E_COL_TITLE, "") or "").strip() or "(sans titre)"
-            owner = str(r.get(E_COL_OWNER, "") or "").strip() or "—"
-            created = _fmt_short(r.get("__created__"))
-            deadline = _fmt_short(r.get("__deadline__"))
-            status = str(r.get(E_COL_STATUS, "") or "").strip() or "—"
-            comment = str(r.get(E_COL_TASK_COMMENT_TEXT, "") or "").strip()
-            line = f"- {title} | Ecrit le: {created} | Pour le: {deadline} | Fait le: {status} | Concerne: {company_name} | Propriétaire: {owner}"
-            if comment and comment.lower() != "nan":
-                line += f" | Commentaire: {comment}"
-            return line
-
-        lines = [
-            "Bonjour,",
-            "",
-            f"Veuillez trouver ci-après les sujets listés en réunion du {_fmt_short(meet_date)}.",
-            "",
-            "Rappels en cours :",
+        concern_cols = [
+            col for col in all_project_df.columns
+            if (
+                "concerne" in str(col).lower()
+                or "concern" in str(col).lower()
+                or "entreprise" in str(col).lower()
+                or "company" in str(col).lower()
+            )
         ]
+        if E_COL_COMPANY_TASK not in concern_cols:
+            concern_cols.append(E_COL_COMPANY_TASK)
 
-        for comp in sorted(recipients_by_company.keys()):
-            g = all_project_df.loc[(all_project_df["__company__"].astype(str) == comp) & (all_project_df["__is_task__"] == True) & (all_project_df["__completed__"] == False)].copy()
-            rem = g.loc[g["__deadline__"].notna() & (g["__deadline__"] < today_ref)].copy()
-            lines.append(f"- {comp} : {len(rem)} rappel(s)")
-
-        lines.extend([
-            "",
-            "=" * 72,
-            f"Réunion: {meeting_id} | Projet: {project} | Généré le: {_fmt_short(today_ref)}",
-            "NB: ce brouillon liste tous les sujets OUVERTS du projet (pas seulement la réunion).",
-            "=" * 72,
-            "",
-        ])
-
-        for comp, g_comp in all_project_df.groupby("__company__", dropna=False):
-            comp = str(comp)
-            lines.append(f"ENTREPRISE : {comp}")
-            lines.append(f"Destinataires détectés: {', '.join(recipients_by_company.get(comp, [])) or 'aucun'}")
-            for info in recipients_details.get(comp, []):
-                lines.append(f"  • {info}")
-            lines.append("")
-
-            for perimeter, g_per in g_comp.groupby("__area_list__", dropna=False):
-                tasks = g_per.loc[g_per["__is_task__"] == True].copy()
-                memos = g_per.loc[g_per["__is_task__"] == False].copy()
-                open_all = tasks.loc[tasks["__completed__"] == False].copy()
-                reminders = open_all.loc[(open_all["__deadline__"].notna()) & (open_all["__deadline__"] < today_ref)].copy()
-                if open_all.empty and memos.empty:
+        drafts_by_company: Dict[str, Dict[str, str]] = {}
+        for comp in target_companies:
+            comp_norm = _norm_name(comp)
+            items: List[dict] = []
+            for _, r in all_project_df.iterrows():
+                concerne = _companies_concerned_for_row(r, concern_cols)
+                concerne_norm = {_norm_name(x) for x in concerne}
+                if not concerne_norm or comp_norm not in concerne_norm:
                     continue
 
-                lines.append(f"Périmètre : {perimeter if str(perimeter).strip() else 'Généralité'}")
-                lines.append(f"KPI -> ouverts={len(open_all)} | rappels={len(reminders)} | mémos={len(memos)}")
-                lines.append("Sujet | Ecrit le | Pour le | Fait le | Concerne")
-                lines.append("-" * 72)
+                is_task = bool(r.get("__is_task__", False))
+                is_completed = bool(r.get("__completed__", False))
+                due_date = r.get("__deadline__")
+                created_date = r.get("__created__")
+                done_date = r.get("__done_date__")
 
-                if not reminders.empty:
-                    lines.append("Rappels (ouverts):")
-                    for _, r in reminders.iterrows():
-                        lines.append(_line_task_row(r, comp))
+                if is_task and not is_completed and isinstance(due_date, date) and due_date < meeting_date:
+                    itype = "reminder"
+                    done_label = "RAPPEL"
+                elif is_task and not is_completed:
+                    itype = "open"
+                    done_label = "/"
+                elif is_task and is_completed:
+                    row_meeting = str(r.get(E_COL_MEETING_ID, "") or "").strip()
+                    if row_meeting != str(meeting_id):
+                        continue
+                    itype = "done"
+                    done_label = _fmt_mail_date(done_date)
+                else:
+                    itype = "memo"
+                    done_label = "/"
 
-                if not open_all.empty:
-                    lines.append("Tous les ouverts:")
-                    for _, r in open_all.iterrows():
-                        lines.append(_line_task_row(r, comp))
+                items.append({
+                    "type": itype,
+                    "subject": str(r.get(E_COL_TITLE, "") or "").strip() or "(sans titre)",
+                    "created_date": created_date,
+                    "due_date": due_date,
+                    "done_date": done_date,
+                    "done_label": done_label,
+                    "concerne": concerne,
+                    "area": str(r.get("__area_list__", "") or "").strip() or "Généralité",
+                })
 
-                if not memos.empty:
-                    lines.append("Mémos:")
-                    for _, r in memos.iterrows():
-                        memo_title = str(r.get(E_COL_TITLE, "") or "").strip() or "(sans titre)"
-                        memo_created = _fmt_short(r.get("__created__"))
-                        lines.append(f"- {memo_title} | Ecrit le: {memo_created} | Pour le: / | Fait le: / | Concerne: {comp}")
+            subject, html = build_company_email_html(
+                meeting={"project": project, "meeting_id": meeting_id},
+                company={"name": comp},
+                items=items,
+                meeting_date=meeting_date,
+                app_url="https://app.atelier-tempo.fr",
+            )
+            text_fallback = (
+                f"Bonjour,\n\nVeuillez trouver ci-après les sujets listés en réunion du {_fmt_mail_date(meeting_date)}.\n"
+                "(Version texte. Utiliser le HTML pour un rendu complet.)"
+            )
+            drafts_by_company[comp] = {
+                "subject": subject,
+                "html": html,
+                "text_fallback": text_fallback,
+            }
 
-                lines.append("")
-
-            lines.append("-" * 72)
-            lines.append("")
-
-        lines.extend([
-            "Téléchargez gratuitement l'application de gestion de projet METRONOME :",
-            "app.atelier-tempo.fr",
-            "",
-            "Vous en souhaitant bonne réception,",
-        ])
-
-        draft_text = "\n".join(lines).strip()
+        primary_company = target_companies[0]
+        emails_detected = sorted(set(recipients_by_company.get(primary_company, []) or []))
+        by_company_label = {
+            comp: (recipients_by_company.get(comp, []) or [])
+            for comp in target_companies
+        }
         return {
             "meeting_id": meeting_id,
             "project": project,
-            "selected_companies": sorted({str(c) for c in all_project_df["__company__"].astype(str).tolist()}),
-            "recipients": recipients,
-            "recipients_by_company": recipients_by_company,
-            "draft_text": draft_text,
+            "selected_companies": target_companies,
+            "emails_detected": emails_detected,
+            "subject": drafts_by_company[primary_company]["subject"],
+            "html": drafts_by_company[primary_company]["html"],
+            "text_fallback": drafts_by_company[primary_company]["text_fallback"],
+            "emails_by_company": by_company_label,
+            "drafts_by_company": drafts_by_company,
         }
     except MissingDataError as err:
         return JSONResponse(
