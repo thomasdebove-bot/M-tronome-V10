@@ -901,7 +901,7 @@ def build_company_email_html(
     rappels_lines = [f"{co} : {cnt} rappel(s)" for co, cnt in sorted(reminders_by_company.items(), key=lambda kv: _norm_name(kv[0])) if int(cnt) >= 1]
     if not rappels_lines:
         rappels_lines = ["Aucun rappel"]
-    html_parts.append('<p><b><u>Rappels en cours :</u></b><br/>' + '<br/>'.join(f'<span style="color:#b91c1c;font-weight:700">{_cell_text(x)}</span>' for x in rappels_lines) + '</p>')
+    html_parts.append('<p><b><u>Rappels en cours :</u></b><br/>' + '<br/>'.join(_cell_text(x) for x in rappels_lines) + '</p>')
 
     for area in sorted(area_map.keys(), key=lambda x: _norm_name(x)):
         rows = sorted(
@@ -930,16 +930,20 @@ def build_company_email_html(
 
         rows_html: List[str] = []
         for it in rows:
-            sujet = _short_text(str(it.get("subject") or "(sans titre)"), 160)
+            sujet = str(it.get("subject") or "(sans titre)")
             ecrit_le = _fmt_mail_date(it.get("created_date"))
-            pour_le = "" if str(it.get("type") or "") == "memo" else _fmt_mail_date(it.get("due_date"))
-            if str(it.get("type") or "") == "reminder":
+            pour_le = "/" if str(it.get("type") or "") == "memo" else _fmt_mail_date(it.get("due_date"))
+            is_reminder = str(it.get("type") or "") == "reminder"
+            if is_reminder:
                 rl = int(it.get("reminder_level") or 1)
                 fait_le = f"RAPPEL {rl}"
             else:
-                fait_le = str(it.get("done_label") or "").strip() or ""
+                fait_le = str(it.get("done_label") or "").strip() or ("/" if str(it.get("type") or "") == "memo" else "")
             concerne = ", ".join([str(x).strip() for x in (it.get("concerne") or []) if str(x).strip()]) or company_name
-            rows_html.append(tr([sujet, ecrit_le, pour_le, fait_le, concerne]))
+            row_html = tr([sujet, ecrit_le, pour_le, fait_le, concerne])
+            if is_reminder:
+                row_html = row_html.replace('<tr>', '<tr style="color:#b91c1c;font-weight:700;">', 1)
+            rows_html.append(row_html)
 
         table_html = '<table style="width:100%;border-collapse:collapse;border:1px solid #999;">' + header + '<tbody>' + ''.join(rows_html) + '</tbody></table>'
         html_parts.append(table_html)
@@ -4808,6 +4812,9 @@ def api_home_meeting_dashboard(
         if package:
             entries = entries.loc[entries["__package_list__"].astype(str) == package].copy()
 
+        # Rappels entreprises recalculés sur le périmètre/filtre courant
+        company_counts = reminders_by_company(rem_df)
+
         timeline = []
         cal_start = None
         cal_end = None
@@ -5184,14 +5191,11 @@ def api_meeting_company_mail_draft(
                 itype = "open"
                 done_label = ""
             elif is_task and is_completed:
-                row_meeting = str(r.get(E_COL_MEETING_ID, "") or "").strip()
-                if row_meeting != str(meeting_id):
-                    continue
-                itype = "done"
-                done_label = _fmt_mail_date(done_date)
+                # On n'inclut pas les sujets faits dans le mail entreprise (open only + rappels + mémos)
+                continue
             else:
                 itype = "memo"
-                done_label = ""
+                done_label = "/"
 
             items_all.append({
                 "type": itype,
