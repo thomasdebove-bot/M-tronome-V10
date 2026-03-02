@@ -869,19 +869,21 @@ def build_company_email_html(
         return str(value or "").replace("\r\n", "\n").replace("\r", "\n")
     def _cell_text(value: str) -> str:
         return escape(_safe_text(value)).replace("\n", "<br/>")
-    def td(val: str, center: bool = False, raw: bool = False) -> str:
+    def td(val: str, center: bool = False, raw: bool = False, nowrap: bool = False) -> str:
         align = "center" if center else "left"
         body = str(val or "") if raw else _cell_text(val)
         if center and not str(body).strip():
             body = "&nbsp;"
-        extra = "white-space:nowrap;" if center else ""
+        extra = "white-space:nowrap;" if nowrap else ""
         return f'<td style="border:1px solid #999;padding:6px;vertical-align:top;text-align:{align};{extra}">{body}</td>'
 
     def tr(cells: list[str], raw_indices: Optional[set[int]] = None) -> str:
         raw_indices = raw_indices or set()
         parts = []
         for idx, c in enumerate(cells):
-            parts.append(td(c, center=(idx > 0), raw=(idx in raw_indices)))
+            # nowrap uniquement sur colonnes date/fait-le, pas sur Concerne
+            use_nowrap = idx in {1, 2, 3}
+            parts.append(td(c, center=(idx > 0), raw=(idx in raw_indices), nowrap=use_nowrap))
         return "<tr>" + "".join(parts) + "</tr>"
 
     area_map: Dict[str, List[dict]] = {}
@@ -3022,7 +3024,9 @@ async function generateCompanyMailDraft(){
   const allCompanies = (document.getElementById('mailAllCompanies')?.checked) ? '1' : '0';
   const pStart = document.getElementById('mailPeriodStart')?.value || '';
   const pEnd = document.getElementById('mailPeriodEnd')?.value || '';
-  const url = `/api/meeting_company_mail_draft?meeting_id=${encodeURIComponent(meeting)}&project=${encodeURIComponent(project)}&selected_companies=${encodeURIComponent(companies.join(','))}&all_companies=${allCompanies}&period_start=${encodeURIComponent(pStart)}&period_end=${encodeURIComponent(pEnd)}`;
+  const incTasks = document.getElementById('mailIncludeTasks')?.checked ? '1' : '0';
+  const incMemos = document.getElementById('mailIncludeMemos')?.checked ? '1' : '0';
+  const url = `/api/meeting_company_mail_draft?meeting_id=${encodeURIComponent(meeting)}&project=${encodeURIComponent(project)}&selected_companies=${encodeURIComponent(companies.join(','))}&all_companies=${allCompanies}&period_start=${encodeURIComponent(pStart)}&period_end=${encodeURIComponent(pEnd)}&include_tasks=${incTasks}&include_memos=${incMemos}`;
   const res = await fetch(url);
   const data = await res.json();
   if(data.error){ alert(data.error); return; }
@@ -3076,10 +3080,14 @@ window.addEventListener('DOMContentLoaded', () => {
   const sel = document.getElementById('mailCompanySelect');
   const pStart = document.getElementById('mailPeriodStart');
   const pEnd = document.getElementById('mailPeriodEnd');
+  const incTasks = document.getElementById('mailIncludeTasks');
+  const incMemos = document.getElementById('mailIncludeMemos');
   if(allChk) allChk.addEventListener('change', () => { toggleMailCompanyMode(); generateCompanyMailDraft(); });
   if(sel) sel.addEventListener('change', generateCompanyMailDraft);
   if(pStart) pStart.addEventListener('change', generateCompanyMailDraft);
   if(pEnd) pEnd.addEventListener('change', generateCompanyMailDraft);
+  if(incTasks) incTasks.addEventListener('change', generateCompanyMailDraft);
+  if(incMemos) incMemos.addEventListener('change', generateCompanyMailDraft);
   refreshDashboard();
 });
 """
@@ -3208,6 +3216,8 @@ select{{width:100%;padding:12px 12px;border-radius:12px;border:1px solid var(--b
 .mailPeriodRow{{display:flex;gap:8px;align-items:center;flex-wrap:wrap}}
 .mailPeriodRow label{{display:grid;gap:4px;font-size:12px;color:var(--muted)}}
 .mailPeriodRow input{{padding:7px 9px;border:1px solid var(--border);border-radius:8px;font:12px/1.3 system-ui,-apple-system,Segoe UI,Roboto,Arial;}}
+.mailTypeRow{{display:flex;gap:12px;align-items:center;flex-wrap:wrap}}
+.mailTypeRow label{{display:inline-flex;gap:6px;align-items:center;font-size:12px;color:var(--muted)}}
 .mailField textarea,.mailField select{{width:100%;padding:10px;border-radius:10px;border:1px solid var(--border);font:13px/1.4 system-ui,-apple-system,Segoe UI,Roboto,Arial;}}
 #mailCompanySelect{{height:190px}}
 #mailBody{{min-height:520px;font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre;tab-size:2}}
@@ -3344,6 +3354,7 @@ body.drawerOpen{{overflow:hidden}}
         <div class="mailField">
           <label><input id="mailAllCompanies" type="checkbox" checked /> Toutes les entreprises (sinon sélection multiple)</label>
           <div class="mailPeriodRow"><label>Du <input id="mailPeriodStart" type="date" /></label><label>Au <input id="mailPeriodEnd" type="date" /></label></div>
+          <div class="mailTypeRow"><label><input id="mailIncludeTasks" type="checkbox" checked /> Tâches</label><label><input id="mailIncludeMemos" type="checkbox" checked /> Mémos</label></div>
           <select id="mailCompanySelect" multiple></select>
         </div>
         <div class="mailField">
@@ -5108,6 +5119,8 @@ def api_meeting_company_mail_draft(
     all_companies: bool = Query(default=True),
     period_start: str = Query(default=""),
     period_end: str = Query(default=""),
+    include_tasks: bool = Query(default=True),
+    include_memos: bool = Query(default=True),
 ):
     try:
         mrow = meeting_row(meeting_id)
@@ -5210,6 +5223,11 @@ def api_meeting_company_mail_draft(
             created_date = r.get("__created__")
             done_date = r.get("__done_date__")
             rem_lvl = 0
+
+            if is_task and not include_tasks:
+                continue
+            if (not is_task) and not include_memos:
+                continue
 
             if p_start or p_end:
                 dates_for_match = [d for d in [created_date, due_date, done_date] if isinstance(d, date)]
