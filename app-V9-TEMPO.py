@@ -2095,7 +2095,7 @@ function scrollTimelineToDate(dateIso){
   const start = new Date(startIso + 'T00:00:00');
   const target = new Date(dateIso + 'T00:00:00');
   const days = Math.max(0, Math.floor((target - start)/86400000));
-  viewport.scrollLeft = Math.max(0, days * pxPerDay - 120);
+  viewport.scrollLeft = Math.max(0, days * pxPerDay - (viewport.clientWidth * 0.45));
 }
 
 function goToday(){
@@ -2103,11 +2103,42 @@ function goToday(){
   scrollTimelineToDate(todayIso);
 }
 
+function goMeetingDate(){
+  const data = window.__homeDashboardData || {};
+  const d = data.reference_date || '';
+  if(d) scrollTimelineToDate(d);
+}
+
 function goFirstReminder(){
   const data = window.__homeDashboardData || {};
   const timeline = data.timeline || [];
   const first = timeline.find(it => it.status === 'rappel');
   if(first && first.start){ scrollTimelineToDate(first.start); }
+}
+
+function setSectionCollapsed(area){
+  window.__tlCollapsed = window.__tlCollapsed || {};
+  window.__tlCollapsed[area] = !window.__tlCollapsed[area];
+  renderTimeline(window.__homeDashboardData || null);
+}
+
+function timelineDisplayState(it){
+  if(it.completed) return 'closed';
+  const today = new Date(); today.setHours(0,0,0,0);
+  const start = new Date((it.start||'') + 'T00:00:00');
+  const end = new Date((it.end||'') + 'T00:00:00');
+  if(!isNaN(end) && end < today) return 'late';
+  if(!isNaN(start) && start > today) return 'future';
+  return 'active';
+}
+
+function taskTooltip(it){
+  return `Zone: ${it.area || 'Général'}
+Lot: ${it.package || 'Sans lot'}
+Responsable: ${it.owner || 'Non attribué'}
+Début: ${it.start_txt || ''}
+Fin: ${it.end_txt || ''}
+Statut: ${it.status || ''}`;
 }
 
 function renderTimeline(data){
@@ -2118,33 +2149,32 @@ function renderTimeline(data){
     timelineEl.innerHTML = '<div class="empty">Aucun rendu daté selon les filtres.</div>';
     return;
   }
+
   const zoomLevel = getZoomLevel();
   const zoomMode = ['year','month','week','day'][zoomLevel] || 'week';
   const pxPerDay = zoomPxPerDay(zoomLevel);
+  const compact = !!document.getElementById('compactView')?.checked;
+
   const cal = data?.calendar || {};
   const startIso = cal.start || timeline[0]?.start || '';
   const endIso = cal.end || timeline[timeline.length-1]?.end || startIso;
   const padDays = zoomMode === 'day' ? 8 : (zoomMode === 'week' ? 18 : 30);
   const baseStart = new Date(startIso + 'T00:00:00');
   const baseEnd = new Date(endIso + 'T00:00:00');
-  const today = new Date();
-  today.setHours(0,0,0,0);
+  const meetingDate = new Date((data?.reference_date || startIso) + 'T00:00:00');
+  meetingDate.setHours(0,0,0,0);
+  const today = new Date(); today.setHours(0,0,0,0);
   const windowMode = currentWindowMode();
 
   let viewStart = new Date(baseStart);
   let viewEnd = new Date(baseEnd);
   if(windowMode === '4w'){
-    viewStart = new Date(today);
-    viewStart.setDate(viewStart.getDate() - 7);
-    viewEnd = new Date(today);
-    viewEnd.setDate(viewEnd.getDate() + 28);
+    viewStart = new Date(today); viewStart.setDate(viewStart.getDate() - 7);
+    viewEnd = new Date(today); viewEnd.setDate(viewEnd.getDate() + 28);
   } else if(windowMode === '3m'){
-    viewStart = new Date(today);
-    viewStart.setDate(viewStart.getDate() - 14);
-    viewEnd = new Date(today);
-    viewEnd.setDate(viewEnd.getDate() + 90);
+    viewStart = new Date(today); viewStart.setDate(viewStart.getDate() - 14);
+    viewEnd = new Date(today); viewEnd.setDate(viewEnd.getDate() + 90);
   }
-
   if(viewStart > baseStart) viewStart = new Date(baseStart);
   if(viewEnd < baseEnd) viewEnd = new Date(baseEnd);
   viewStart.setDate(viewStart.getDate() - padDays);
@@ -2153,8 +2183,8 @@ function renderTimeline(data){
   const totalDays = Math.max(1, Math.floor((viewEnd - viewStart)/86400000) + 1);
   const totalWidth = Math.max(2200, totalDays * pxPerDay);
   const ticks = timelineTicks(viewStart.toISOString().slice(0,10), viewEnd.toISOString().slice(0,10), zoomMode, pxPerDay);
-
   const startDate = viewStart;
+
   const ticksHtml = ticks.map(t => {
     const td = new Date(t.iso + 'T00:00:00');
     const nd = new Date((t.next_iso || t.iso) + 'T00:00:00');
@@ -2165,18 +2195,60 @@ function renderTimeline(data){
     return `<div class="gTick" style="left:${left}px;width:${width}px"><span>${t.label}</span></div>`;
   }).join('');
 
-  const rowsHtml = timeline.map(it => {
-    const left = Math.max(0, (Number(it.offset_days || 0) + padDays) * pxPerDay);
-    const width = Math.max(16, Number(it.duration_days || 1) * pxPerDay);
-    const perimeter = it.perimeter || it.area || 'Périmètre';
-    const tip = it.title || perimeter;
-    const cls = it.package_color || 'pkg-default';
-    const warn = it.status === 'rappel' ? '<span class="warnBlink">!</span>' : '';
+  const meetLeft = Math.max(0, Math.floor((meetingDate - startDate)/86400000) * pxPerDay);
+
+  const grouped = {};
+  timeline.forEach(it => {
+    const k = it.area || 'Général';
+    if(!grouped[k]) grouped[k] = [];
+    grouped[k].push(it);
+  });
+  const areas = Object.keys(grouped).sort((a,b) => a.localeCompare(b,'fr'));
+  const collapsed = window.__tlCollapsed || {};
+
+  const maxInitial = 200;
+  const sourceAreas = areas.map(a => ({area:a, items:grouped[a]}));
+  const fullCount = timeline.length;
+  if(!window.__tlMaxRows || window.__tlMaxRows < maxInitial) window.__tlMaxRows = maxInitial;
+
+  function renderRowsForItems(items){
+    return items.map(it => {
+      const left = Math.max(0, (Number(it.offset_days || 0) + padDays) * pxPerDay);
+      const width = Math.max(16, Number(it.duration_days || 1) * pxPerDay);
+      const perimeter = it.perimeter || it.area || 'Périmètre';
+      const tip = taskTooltip(it);
+      const cls = it.package_color || 'pkg-default';
+      const warn = it.status === 'rappel' ? '<span class="warnBlink">⚠</span>' : '';
+      const dState = timelineDisplayState(it);
+      const meetingFx = it.meeting_linked ? 'meetingLinked' : '';
+      const detail = compact ? '' : `<div class="gMeta">${it.owner || 'Non attribué'} • fin ${it.end_txt || ''}</div>`;
+      return `
+        <div class="gRow ${dState}">
+          <div class="gTrack" style="width:${totalWidth}px">
+            <div class="gBar ${cls} ${meetingFx}" style="left:${left}px;width:${width}px" title="${tip}">
+              <span class="lotBadge">${(it.package || 'LOT').slice(0,8)}</span>
+              <span class="barTitle">${warn}${perimeter}</span>
+            </div>
+            ${detail}
+          </div>
+        </div>`;
+    }).join('');
+  }
+
+  let remaining = window.__tlMaxRows;
+  const sectionsHtml = sourceAreas.map(({area, items}) => {
+    const isClosed = !!collapsed[area];
+    const visibleItems = remaining > 0 ? items.slice(0, remaining) : [];
+    remaining -= visibleItems.length;
+    const sectionRows = isClosed ? '' : renderRowsForItems(visibleItems);
+    const hiddenCount = Math.max(0, items.length - visibleItems.length);
     return `
-      <div class="gRow">
-        <div class="gTrack" style="width:${totalWidth}px">
-          <div class="gBar ${cls}" style="left:${left}px;width:${width}px" title="${tip}">${warn}${perimeter}</div>
-        </div>
+      <div class="gSection">
+        <button class="gSectionHead" type="button" onclick="setSectionCollapsed(decodeURIComponent('${encodeURIComponent(area)}'))">
+          <span>${isClosed ? '▸' : '▾'}</span><span>${area}</span><span class="small">${items.length}</span>
+        </button>
+        ${sectionRows}
+        ${(!isClosed && hiddenCount>0) ? `<div class="small" style="padding:4px 10px">+${hiddenCount} tâche(s) masquée(s) (lazy)</div>` : ''}
       </div>`;
   }).join('');
 
@@ -2185,16 +2257,19 @@ function renderTimeline(data){
       <div class="gTop" id="timelineRoot" data-start="${startIso}" data-end="${endIso}" data-view-start="${viewStart.toISOString().slice(0,10)}" data-px-per-day="${pxPerDay}">
         <div class="gTopRight" style="width:${totalWidth}px"><div class="gTicks">${ticksHtml}</div></div>
       </div>
-      <div class="gBody"><div class="todayLine" style="left:${Math.max(0, Math.floor((today - startDate)/86400000)*pxPerDay)}px"></div>${rowsHtml}</div>
-    </div>`;
+      <div class="gBody">
+        <div class="meetingLine" style="left:${meetLeft}px"><span>Réunion</span></div>
+        <div class="todayLine" style="left:${Math.max(0, Math.floor((today - startDate)/86400000)*pxPerDay)}px"></div>
+        ${sectionsHtml}
+      </div>
+    </div>
+    ${fullCount>window.__tlMaxRows ? `<div class='small' style='margin-top:6px'>Lazy mode actif: ${Math.min(window.__tlMaxRows, fullCount)}/${fullCount} tâches affichées. <button class="btnLite" type="button" onclick="window.__tlMaxRows += 120; renderTimeline(window.__homeDashboardData || null)">Charger +120</button></div>` : ''}`;
 
   const viewport = document.getElementById('timelineViewport');
   if(viewport){
-    const first = timeline[0];
-    const targetLeft = Math.max(0, ((Number(first?.offset_days || 0) + padDays) * pxPerDay) - 120);
+    const targetLeft = Math.max(0, meetLeft - (viewport.clientWidth * 0.45));
     viewport.scrollLeft = targetLeft;
   }
-  if(windowMode !== 'all'){ goToday(); }
   enableTimelineDragScroll();
 }
 
@@ -2277,7 +2352,7 @@ select{{width:100%;padding:12px 12px;border-radius:12px;border:1px solid var(--b
 .timelineZoom input[type=range]{{width:110px}}
 .timelineZoomLabel{{font-size:12px;font-weight:900;color:var(--muted);min-width:100px}}
 .gantt{{border:1px solid var(--border);border-radius:12px;background:#fff;padding:10px;overflow:hidden}}
-.gViewport{{overflow-x:auto;overflow-y:hidden;border:1px solid var(--border);border-radius:10px;scrollbar-gutter:stable both-edges;cursor:grab}}
+.gViewport{{overflow:auto;max-height:64vh;border:1px solid var(--border);border-radius:10px;scrollbar-gutter:stable both-edges;cursor:grab;scroll-behavior:smooth}}
 .gViewport.dragging{{cursor:grabbing}}
 .gTop{{min-width:max-content;position:sticky;top:0;z-index:2;background:#fff}}
 .gTopRight{{position:relative;height:34px;border-bottom:1px solid var(--border);background:#f8fafc}}
@@ -2287,8 +2362,14 @@ select{{width:100%;padding:12px 12px;border-radius:12px;border:1px solid var(--b
 .gBody{{min-width:max-content;position:relative}}
 .todayLine{{position:absolute;top:0;bottom:0;width:2px;background:#dc2626;opacity:.9;z-index:1}}
 .gRow{{min-width:max-content}}
-.gTrack{{position:relative;height:32px;border-bottom:1px solid #f1f5f9;background:repeating-linear-gradient(to right,#fff,#fff 47px,#f8fafc 47px,#f8fafc 48px)}}
-.gBar{{position:absolute;height:22px;top:4px;border-radius:6px;padding:1px 8px;font-size:11px;font-weight:900;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;border:1px solid rgba(15,23,42,.28);color:#0b1220;display:flex;align-items:center;gap:6px}}
+.gTrack{{position:relative;height:32px;border-bottom:1px solid #eef2f7;background:repeating-linear-gradient(to right,#fff,#fff 139px,#f8fafc 139px,#f8fafc 140px)}}
+.gSection{{margin-bottom:6px}}
+.gSectionHead{{display:flex;align-items:center;gap:8px;width:100%;text-align:left;border:0;background:#f8fafc;border-bottom:1px solid #e2e8f0;padding:7px 10px;font-weight:900;position:sticky;left:0;z-index:2}}
+.gBar{{position:absolute;min-height:28px;height:28px;top:2px;border-radius:6px;padding:2px 8px;font-size:12px;font-weight:900;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;border:1px solid rgba(15,23,42,.28);color:#0b1220;display:flex;align-items:center;gap:6px;box-shadow:0 2px 8px rgba(15,23,42,.10);transform-origin:center;transition:transform .15s ease, box-shadow .15s ease}}
+.gBar:hover{{transform:translateY(-1px);box-shadow:0 5px 14px rgba(15,23,42,.15)}}
+.lotBadge{{display:inline-flex;align-items:center;justify-content:center;font-size:10px;padding:1px 6px;border-radius:999px;background:rgba(255,255,255,.7);border:1px solid rgba(15,23,42,.18)}}
+.barTitle{{display:inline-block;max-width:calc(100% - 52px);overflow:hidden;text-overflow:ellipsis}}
+.meetingLinked{{transform:scale(1.03);box-shadow:0 0 0 2px rgba(14,165,233,.25),0 4px 12px rgba(14,165,233,.25)}}
 .warnBlink{{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;border-radius:999px;background:#ef4444;color:#fff;font-size:10px;font-weight:1000;animation:blinkWarn 1s steps(2,start) infinite}}
 @keyframes blinkWarn{{to{{visibility:hidden}}}}
 .gBar.pkg-cvc,.lg.pkg-cvc{{background:#22d3ee}}
@@ -2297,6 +2378,13 @@ select{{width:100%;padding:12px 12px;border-radius:12px;border:1px solid var(--b
 .gBar.pkg-goe,.lg.pkg-goe{{background:#7f1d1d;color:#fff}}
 .gBar.pkg-syn,.lg.pkg-syn{{background:#f59e0b;color:#111827}}
 .gBar.pkg-default{{background:#cbd5e1}}
+.gRow.late .gBar{{outline:2px solid rgba(220,38,38,.55)}}
+.gRow.future .gBar{{opacity:.6}}
+.gRow.closed .gBar{{opacity:.3}}
+.gRow.closed .barTitle{{text-decoration:line-through}}
+.gMeta{{font-size:11px;color:#64748b;padding:1px 6px 4px 10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
+.meetingLine{{position:absolute;top:0;bottom:0;width:3px;background:#0ea5e9;z-index:3;box-shadow:0 0 0 1px rgba(14,165,233,.15)}}
+.meetingLine span{{position:sticky;top:2px;display:inline-block;transform:translateX(6px);background:#0ea5e9;color:#fff;font-size:10px;font-weight:900;padding:2px 6px;border-radius:999px}}
 .small{{font-size:12px;color:var(--muted);font-weight:700}}
 .empty{{color:var(--muted);font-style:italic}}
 </style>
@@ -2369,7 +2457,7 @@ select{{width:100%;padding:12px 12px;border-radius:12px;border:1px solid var(--b
             <span class="timelineZoomLabel" id="timelineScaleLabel">Échelle: semaine</span>
           </div>
           <button type="button" class="btnLite" onclick="goToday()">Aujourd'hui</button>
-          <button type="button" class="btnLite" onclick="goFirstReminder()">Aller aux rappels</button>
+          <button type="button" class="btnLite" onclick="goFirstReminder()">Aller aux rappels</button><label class="btnLite" style="display:inline-flex;align-items:center;gap:8px"><input id="compactView" type="checkbox" checked onchange="renderTimeline(window.__homeDashboardData || null)"/> Vue compacte</label>
         </div>
       </div>
       <div class="timelineLegend"><span class="lg pkg-cvc">CVC</span><span class="lg pkg-plb">PLB</span><span class="lg pkg-ele">ELE/CFA/CFO</span><span class="lg pkg-goe">GOE/STR</span><span class="lg pkg-syn">Synthèse</span><span class="lg warn">! Rappel</span></div><div id="timeline" class="gantt" style="margin-top:10px"><div class="empty">Aucune donnée.</div></div>
@@ -3872,6 +3960,10 @@ def api_home_meeting_dashboard(
                     "perimeter": area_label,
                     "package_color": _timeline_package_color(package_label),
                     "company": str(r.get("__company__", "Non renseigné")),
+                    "owner": str(r.get(E_COL_OWNER, "") or "").strip() or "Non attribué",
+                    "meeting_id": str(r.get(E_COL_MEETING_ID, "") or "").strip(),
+                    "meeting_linked": str(r.get(E_COL_MEETING_ID, "") or "").strip() == str(meeting_id),
+                    "completed": bool(r.get("__completed__", False)),
                     "status": status,
                 })
 
