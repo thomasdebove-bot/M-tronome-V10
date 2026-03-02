@@ -5144,12 +5144,25 @@ def api_meeting_company_mail_draft(
             base_emails = sorted({e.lower() for e in emails_map.get(key, []) if e})
             recipients_by_company[comp] = sorted(set(matched_company_emails or users_emails or base_emails))
 
-        concern_cols = [col for col in all_project_df.columns if ("concerne" in str(col).lower() or "concerned" in str(col).lower() or "concern" in str(col).lower())]
+        concern_cols = [
+            col for col in all_project_df.columns
+            if ("concerne" in str(col).lower() or "concerned" in str(col).lower() or "concern" in str(col).lower())
+        ]
+        # Fallback robustesse: certains exports n'ont pas de colonne "Concerne" explicite.
+        # Dans ce cas on se rabat sur la colonne entreprise de la tâche pour ne pas perdre toute la data.
+        if not concern_cols and E_COL_COMPANY_TASK in all_project_df.columns:
+            concern_cols = [E_COL_COMPANY_TASK]
 
         target_norm = {_norm_name(x): x for x in target_companies}
         items_all: List[dict] = []
         for _, r in all_project_df.iterrows():
             concerne_raw = _companies_concerned_for_row(r, concern_cols)
+            if not concerne_raw:
+                # fallback ligne à ligne: si aucune valeur concernée lue mais entreprise tâche présente
+                # on évite un mail vide sur des exports incomplets.
+                co_task = str(r.get(E_COL_COMPANY_TASK, "") or "").strip()
+                if co_task:
+                    concerne_raw = [co_task]
             concerne_filtered = []
             seen_cf = set()
             for c in concerne_raw:
