@@ -2133,12 +2133,36 @@ function timelineDisplayState(it){
 }
 
 function taskTooltip(it){
-  return `Zone: ${it.area || 'Général'}
+  const title = (it.title || '').trim() || 'Tâche sans titre';
+  const end = new Date((it.end || '') + 'T00:00:00');
+  const today = new Date(); today.setHours(0,0,0,0);
+  const daysLeft = isNaN(end) ? 'n/a' : Math.ceil((end - today)/86400000);
+  const leftTxt = isNaN(end) ? 'n/a' : `${daysLeft}j`;
+  return `Titre: ${title}
+Zone: ${it.area || 'Général'}
 Lot: ${it.package || 'Sans lot'}
 Responsable: ${it.owner || 'Non attribué'}
-Début: ${it.start_txt || ''}
-Fin: ${it.end_txt || ''}
-Statut: ${it.status || ''}`;
+Date début: ${it.start_txt || ''}
+Date fin: ${it.end_txt || ''}
+Statut: ${it.status || ''}
+Jours restants: ${leftTxt}`;
+}
+
+let __tlTipEl = null;
+function ensureTimelineTooltip(){
+  if(__tlTipEl) return __tlTipEl;
+  __tlTipEl = document.createElement('div');
+  __tlTipEl.className = 'tlTooltip';
+  document.body.appendChild(__tlTipEl);
+  return __tlTipEl;
+}
+function bindTimelineTooltips(){
+  const tip = ensureTimelineTooltip();
+  document.querySelectorAll('.gBar[data-tip]').forEach(el => {
+    el.addEventListener('mouseenter', () => { tip.textContent = el.dataset.tip || ''; tip.classList.add('show'); });
+    el.addEventListener('mousemove', (e) => { tip.style.left = (e.pageX + 14) + 'px'; tip.style.top = (e.pageY + 14) + 'px'; });
+    el.addEventListener('mouseleave', () => { tip.classList.remove('show'); });
+  });
 }
 
 function renderTimeline(data){
@@ -2216,18 +2240,25 @@ function renderTimeline(data){
       const left = Math.max(0, (Number(it.offset_days || 0) + padDays) * pxPerDay);
       const width = Math.max(16, Number(it.duration_days || 1) * pxPerDay);
       const perimeter = it.perimeter || it.area || 'Périmètre';
-      const tip = taskTooltip(it);
+      const rawTitle = (it.title || '').trim();
+      if(!rawTitle){ console.error('METRONOME timeline: missing title for task', it); }
+      const taskTitle = rawTitle || 'Tâche sans titre';
+      const tip = taskTooltip({...it, title: taskTitle});
       const cls = it.package_color || 'pkg-default';
-      const warn = it.status === 'rappel' ? '<span class="warnBlink">⚠</span>' : '';
+      const warn = it.status === 'rappel' ? '<span class="warnBlink right">⚠</span>' : '';
       const dState = timelineDisplayState(it);
       const meetingFx = it.meeting_linked ? 'meetingLinked' : '';
-      const detail = compact ? '' : `<div class="gMeta">${it.owner || 'Non attribué'} • fin ${it.end_txt || ''}</div>`;
+      const end = new Date((it.end || '') + 'T00:00:00');
+      const today2 = new Date(); today2.setHours(0,0,0,0);
+      const leftDays = isNaN(end) ? 'n/a' : Math.ceil((end - today2)/86400000) + 'j';
+      const detail = compact ? '' : `<div class="gMeta">${it.owner || 'Non attribué'} • ${taskTitle} • fin ${it.end_txt || ''} • ${leftDays}</div>`;
       return `
         <div class="gRow ${dState}">
           <div class="gTrack" style="width:${totalWidth}px">
-            <div class="gBar ${cls} ${meetingFx}" style="left:${left}px;width:${width}px" title="${tip}">
+            <div class="gBar ${cls} ${meetingFx}" style="left:${left}px;width:${width}px" data-tip="${tip.replaceAll('"','&quot;')}">
               <span class="lotBadge">${(it.package || 'LOT').slice(0,8)}</span>
-              <span class="barTitle">${warn}${perimeter}</span>
+              <span class="barTitle">${taskTitle}</span>
+              ${warn}
             </div>
             ${detail}
           </div>
@@ -2245,7 +2276,7 @@ function renderTimeline(data){
     return `
       <div class="gSection">
         <button class="gSectionHead" type="button" onclick="setSectionCollapsed(decodeURIComponent('${encodeURIComponent(area)}'))">
-          <span>${isClosed ? '▸' : '▾'}</span><span>${area}</span><span class="small">${items.length}</span>
+          <span>${isClosed ? '▸' : '▾'}</span><span>${area}</span><span class="small">${items.length}</span><span class="zoneSignal">${(() => { const late=items.filter(i=>timelineDisplayState(i)==="late").length; const soon=items.filter(i=>{const d=new Date((i.end||"")+"T00:00:00"); const t=new Date(); t.setHours(0,0,0,0); const diff=Math.ceil((d-t)/86400000); return diff>=0 && diff<5;}).length; if(late>0) return `🔴 ${late} retard${late>1?"s":""}`; if(soon>0) return `🟡 ${soon} proche${soon>1?"s":""}`; return "🟢 OK"; })()}</span>
         </button>
         ${sectionRows}
         ${(!isClosed && hiddenCount>0) ? `<div class="small" style="padding:4px 10px">+${hiddenCount} tâche(s) masquée(s) (lazy)</div>` : ''}
@@ -2258,7 +2289,7 @@ function renderTimeline(data){
         <div class="gTopRight" style="width:${totalWidth}px"><div class="gTicks">${ticksHtml}</div></div>
       </div>
       <div class="gBody">
-        <div class="meetingLine" style="left:${meetLeft}px"><span>Réunion</span></div>
+        <div class="meetingBg" style="left:${Math.max(0, meetLeft-8)}px"></div><div class="meetingLine" style="left:${meetLeft}px"><span>Réunion</span></div>
         <div class="todayLine" style="left:${Math.max(0, Math.floor((today - startDate)/86400000)*pxPerDay)}px"></div>
         ${sectionsHtml}
       </div>
@@ -2271,6 +2302,7 @@ function renderTimeline(data){
     viewport.scrollLeft = targetLeft;
   }
   enableTimelineDragScroll();
+  bindTimelineTooltips();
 }
 
 async function refreshDashboard(){
@@ -2301,7 +2333,10 @@ async function refreshDashboard(){
   const aiEl = document.getElementById('aiSummary');
   const keys = Object.keys(ai);
   aiEl.innerHTML = keys.length
-    ? keys.map(k => `<div class="row" style="align-items:flex-start"><strong>${k}</strong><div style="max-width:78%">${ai[k]}</div></div>`).join('')
+    ? keys.map(k => {
+        const z = ai[k] || {};
+        return `<div class="row" style="align-items:flex-start;gap:16px"><strong style="min-width:180px">${k}<br/><span class="small">${z.status || ''}</span></strong><div style="max-width:78%"><div><strong>Indicateurs:</strong> ${z.indicators || ''}</div><div><strong>Analyse:</strong> ${z.analysis || ''}</div><div><strong>🎯 Action prioritaire:</strong> ${z.action || ''}</div></div></div>`;
+      }).join('')
     : '<div class="empty">Pas de synthèse disponible pour ces filtres.</div>';
 }
 
@@ -2362,15 +2397,20 @@ select{{width:100%;padding:12px 12px;border-radius:12px;border:1px solid var(--b
 .gBody{{min-width:max-content;position:relative}}
 .todayLine{{position:absolute;top:0;bottom:0;width:2px;background:#dc2626;opacity:.9;z-index:1}}
 .gRow{{min-width:max-content}}
-.gTrack{{position:relative;height:32px;border-bottom:1px solid #eef2f7;background:repeating-linear-gradient(to right,#fff,#fff 139px,#f8fafc 139px,#f8fafc 140px)}}
+.gTrack{{position:relative;height:34px;border-bottom:1px solid #f6f8fb;background:repeating-linear-gradient(to right,#fff,#fff 179px,#fbfdff 179px,#fbfdff 180px)}}
+.gSection:nth-child(even) .gRow .gTrack{{border-bottom-color:transparent}}
 .gSection{{margin-bottom:6px}}
 .gSectionHead{{display:flex;align-items:center;gap:8px;width:100%;text-align:left;border:0;background:#f8fafc;border-bottom:1px solid #e2e8f0;padding:7px 10px;font-weight:900;position:sticky;left:0;z-index:2}}
+.zoneSignal{{margin-left:auto;font-size:12px;font-weight:900}}
 .gBar{{position:absolute;min-height:28px;height:28px;top:2px;border-radius:6px;padding:2px 8px;font-size:12px;font-weight:900;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;border:1px solid rgba(15,23,42,.28);color:#0b1220;display:flex;align-items:center;gap:6px;box-shadow:0 2px 8px rgba(15,23,42,.10);transform-origin:center;transition:transform .15s ease, box-shadow .15s ease}}
 .gBar:hover{{transform:translateY(-1px);box-shadow:0 5px 14px rgba(15,23,42,.15)}}
 .lotBadge{{display:inline-flex;align-items:center;justify-content:center;font-size:10px;padding:1px 6px;border-radius:999px;background:rgba(255,255,255,.7);border:1px solid rgba(15,23,42,.18)}}
 .barTitle{{display:inline-block;max-width:calc(100% - 52px);overflow:hidden;text-overflow:ellipsis}}
 .meetingLinked{{transform:scale(1.03);box-shadow:0 0 0 2px rgba(14,165,233,.25),0 4px 12px rgba(14,165,233,.25)}}
 .warnBlink{{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;border-radius:999px;background:#ef4444;color:#fff;font-size:10px;font-weight:1000;animation:blinkWarn 1s steps(2,start) infinite}}
+.warnBlink.right{{margin-left:auto}}
+.tlTooltip{{position:fixed;z-index:99999;max-width:320px;white-space:pre-line;background:#0f172a;color:#fff;padding:8px 10px;border-radius:8px;font-size:12px;line-height:1.35;box-shadow:0 10px 24px rgba(2,6,23,.25);opacity:0;transform:translateY(2px);pointer-events:none;transition:opacity .12s ease, transform .12s ease}}
+.tlTooltip.show{{opacity:1;transform:translateY(0)}}
 @keyframes blinkWarn{{to{{visibility:hidden}}}}
 .gBar.pkg-cvc,.lg.pkg-cvc{{background:#22d3ee}}
 .gBar.pkg-plb,.lg.pkg-plb{{background:#ff00cc;color:#fff}}
@@ -2378,12 +2418,14 @@ select{{width:100%;padding:12px 12px;border-radius:12px;border:1px solid var(--b
 .gBar.pkg-goe,.lg.pkg-goe{{background:#7f1d1d;color:#fff}}
 .gBar.pkg-syn,.lg.pkg-syn{{background:#f59e0b;color:#111827}}
 .gBar.pkg-default{{background:#cbd5e1}}
-.gRow.late .gBar{{outline:2px solid rgba(220,38,38,.55)}}
+.gRow.late .gBar{{outline:2px solid rgba(220,38,38,.72)}}
 .gRow.future .gBar{{opacity:.6}}
+.gRow.late .gBar:hover{{transform:translateY(-1px);box-shadow:0 8px 16px rgba(220,38,38,.2)}}
 .gRow.closed .gBar{{opacity:.3}}
 .gRow.closed .barTitle{{text-decoration:line-through}}
 .gMeta{{font-size:11px;color:#64748b;padding:1px 6px 4px 10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
-.meetingLine{{position:absolute;top:0;bottom:0;width:3px;background:#0ea5e9;z-index:3;box-shadow:0 0 0 1px rgba(14,165,233,.15)}}
+.meetingBg{{position:absolute;top:0;bottom:0;width:16px;background:rgba(14,165,233,.02);z-index:2}}
+.meetingLine{{position:absolute;top:0;bottom:0;width:4px;background:#0ea5e9;z-index:3;box-shadow:0 0 0 1px rgba(14,165,233,.15)}}
 .meetingLine span{{position:sticky;top:2px;display:inline-block;transform:translateX(6px);background:#0ea5e9;color:#fff;font-size:10px;font-weight:900;padding:2px 6px;border-radius:999px}}
 .small{{font-size:12px;color:var(--muted);font-weight:700}}
 .empty{{color:var(--muted);font-style:italic}}
@@ -3838,31 +3880,76 @@ def _timeline_package_color(package_label: str) -> str:
     return "pkg-default"
 
 
-def _build_ai_summary_by_area(df: pd.DataFrame, ref_date: date) -> Dict[str, str]:
+def _build_ai_summary_by_area(df: pd.DataFrame, ref_date: date) -> Dict[str, Dict[str, object]]:
     if df.empty:
         return {}
-    out: Dict[str, str] = {}
+    out: Dict[str, Dict[str, object]] = {}
     for area, g in df.groupby("__area_list__", dropna=False):
         gg = g.copy()
         gg["__completed__"] = _series(gg, E_COL_COMPLETED, False).apply(_bool_true)
         gg["__deadline__"] = _series(gg, E_COL_DEADLINE, None).apply(_parse_date_any)
-        open_count = int((~gg["__completed__"]).sum())
-        late_count = int(((~gg["__completed__"]) & (gg["__deadline__"].notna()) & (gg["__deadline__"] < ref_date)).sum())
-        top_titles = (
-            gg.loc[~gg["__completed__"], E_COL_TITLE]
+        gg["__owner__"] = _series(gg, E_COL_OWNER, "").fillna("").astype(str).str.strip()
+        gg["__package__"] = _series(gg, E_COL_PACKAGES, "").fillna("").astype(str).str.strip()
+
+        open_df = gg.loc[~gg["__completed__"]].copy()
+        open_count = int(len(open_df))
+        late_df = open_df.loc[open_df["__deadline__"].notna() & (open_df["__deadline__"] < ref_date)].copy()
+        late_count = int(len(late_df))
+        soon_df = open_df.loc[
+            open_df["__deadline__"].notna()
+            & (open_df["__deadline__"] >= ref_date)
+            & ((open_df["__deadline__"] - ref_date).apply(lambda d: d.days) < 5)
+        ].copy()
+        soon_count = int(len(soon_df))
+
+        dep_mask = (
+            open_df[E_COL_TITLE]
             .fillna("")
             .astype(str)
-            .str.strip()
-            .loc[lambda x: x != ""]
-            .head(3)
-            .tolist()
+            .str.contains(r"stbat|validation|attente|phibor|diffusion", case=False, regex=True)
         )
-        summary = f"Zone {area}: {open_count} sujet(s) à suivre"
+        dep_count = int(dep_mask.sum()) if not open_df.empty else 0
+
+        owners_overload = int((open_df["__owner__"].value_counts() > 2).sum()) if not open_df.empty else 0
+        inter_lot_tension = int((open_df["__package__"].nunique() >= 2) and (open_count >= 3))
+
+        if late_count > 2 or (late_count > 0 and dep_count > 0):
+            level = "🔴 Zone à risque"
+        elif late_count > 0 or soon_count >= 2 or inter_lot_tension:
+            level = "🟠 Zone sous tension"
+        else:
+            level = "🟢 Zone maîtrisée"
+
+        risk_parts = []
+        if dep_count:
+            risk_parts.append("Risque de blocage si validations externes non obtenues rapidement")
+        if inter_lot_tension:
+            risk_parts.append("Tension inter-lots sur la même période")
         if late_count:
-            summary += f", dont {late_count} en rappel prioritaire"
-        if top_titles:
-            summary += ". Points clés: " + "; ".join(top_titles)
-        out[str(area)] = summary + "."
+            risk_parts.append("Retards cumulés impactant le séquencement")
+        if not risk_parts:
+            risk_parts.append("Flux globalement maîtrisé à horizon court")
+
+        if dep_count:
+            action = "Relancer STBAT/validation sous 48h et verrouiller un jalon de décision"
+        elif late_count > 2:
+            action = "Arbitrer les priorités en prochaine réunion et isoler un point critique"
+        elif soon_count >= 2:
+            action = "Prioriser les échéances <5 jours et assigner un responsable unique"
+        else:
+            action = "Maintenir le rythme et anticiper les validations de la prochaine séquence"
+
+        indicators = f"{open_count} tâches ouvertes | {late_count} retards | {soon_count} échéances <5j | {dep_count} dépendances externes"
+        analysis = "; ".join(risk_parts[:3])
+        if owners_overload:
+            analysis += "; vigilance charge responsable"
+
+        out[str(area)] = {
+            "status": level,
+            "indicators": indicators,
+            "analysis": analysis,
+            "action": action,
+        }
     return out
 
 
