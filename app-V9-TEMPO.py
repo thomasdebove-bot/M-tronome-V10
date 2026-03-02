@@ -2157,17 +2157,6 @@ function openTimelineDrawer(task){
   const idEl = document.getElementById('drawerTaskId');
   if(idEl) idEl.textContent = taskId;
 
-  const copyBtn = document.getElementById('drawerCopySummaryBtn');
-  if(copyBtn){
-    copyBtn.dataset.summary = `Titre: ${title}
-Contexte: ${subtitle}
-Timing: ${startTxt} → ${endTxt}
-Signal: ${drawerTimeSignal(task)}
-Responsable: ${owner}
-Entreprise: ${company}${comment !== '—' ? `
-Notes: ${comment}` : ''}`;
-  }
-
   overlay.classList.add('open');
   overlay.setAttribute('aria-hidden', 'false');
   document.body.classList.add('drawerOpen');
@@ -2183,28 +2172,6 @@ function bindTimelineDrawer(){
   window.addEventListener('keydown', (e) => {
     if(e.key === 'Escape') closeTimelineDrawer();
   });
-  const copyBtn = document.getElementById('drawerCopySummaryBtn');
-  if(copyBtn){
-    copyBtn.addEventListener('click', async () => {
-      const txt = copyBtn.dataset.summary || '';
-      if(!txt) return;
-      try {
-        await navigator.clipboard.writeText(txt);
-        copyBtn.textContent = 'Résumé copié';
-        window.setTimeout(() => { copyBtn.textContent = 'Copier résumé'; }, 1200);
-      } catch(_e){
-        copyBtn.textContent = 'Copie impossible';
-        window.setTimeout(() => { copyBtn.textContent = 'Copier résumé'; }, 1200);
-      }
-    });
-  }
-  const markBtn = document.getElementById('drawerMarkDoneBtn');
-  if(markBtn){
-    markBtn.addEventListener('click', () => {
-      markBtn.textContent = 'Traitement marqué (bientôt)';
-      window.setTimeout(() => { markBtn.textContent = 'Marquer comme traité'; }, 1200);
-    });
-  }
 }
 
 function bindTimelineBarClicks(){
@@ -2719,18 +2686,15 @@ select{{width:100%;padding:12px 12px;border-radius:12px;border:1px solid var(--b
 .drawerOverlay.open .taskDrawer{{transform:translateX(0)}}
 .drawerHead{{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:14px 16px;border-bottom:1px solid var(--border);font-weight:1000}}
 .drawerClose{{border:1px solid var(--border);background:#fff;border-radius:10px;width:32px;height:32px;font-size:18px;font-weight:900;cursor:pointer}}
-.drawerBody{{padding:14px 16px;overflow:auto;display:grid;gap:12px}}
-.drawerTitle{{font-size:34px;line-height:1.18;font-weight:1000;margin:0;word-break:break-word}}
-.drawerSubline{{font-size:13px;color:var(--muted);font-weight:800}}
-.drawerTimeSignal{{font-size:14px;font-weight:900;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:8px 10px;display:inline-flex;max-width:max-content}}
-.drawerGrid{{display:grid;grid-template-columns:1fr 1fr;gap:10px}}
-.drawerBlock{{border:1px solid var(--border);border-radius:10px;padding:10px;background:#fff}}
-.drawerBlock .k{{font-size:11px;color:var(--muted);font-weight:900;margin-bottom:4px;text-transform:uppercase;letter-spacing:.02em}}
-.drawerBlock .v{{font-size:14px;font-weight:800;word-break:break-word;white-space:pre-wrap}}
-.drawerActions{{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;border-top:1px solid var(--border);padding-top:10px}}
-.drawerBtn{{border:1px solid var(--border);background:#fff;border-radius:10px;padding:9px 12px;font-weight:900;cursor:pointer}}
-.drawerBtn.primary{{background:var(--accent);color:#fff}}
-.drawerMeta{{font-size:11px;color:var(--muted);font-weight:700;text-align:right}}
+.drawerBody{{padding:18px 20px 16px;overflow:auto;display:grid;gap:14px;background:#fff}}
+.drawerTitle{{font-size:34px;line-height:1.16;font-weight:1000;margin:0;word-break:break-word;letter-spacing:-.01em}}
+.drawerSubline{{font-size:16px;color:#475569;font-weight:700}}
+.drawerTimeSignal{{font-size:16px;font-weight:900;background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:10px 12px;display:inline-flex;max-width:max-content}}
+.drawerInfo{{display:grid;gap:8px}}
+.drawerLine{{display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap}}
+.drawerLine .k{{font-size:13px;color:#64748b;font-weight:900;min-width:98px;text-transform:none;letter-spacing:.01em}}
+.drawerLine .v{{font-size:18px;font-weight:700;color:#0f172a;word-break:break-word;white-space:pre-wrap;flex:1}}
+.drawerMeta{{font-size:10px;color:#94a3b8;font-weight:600;text-align:right}}
 body.drawerOpen{{overflow:hidden}}
 
 </style>
@@ -2824,17 +2788,13 @@ body.drawerOpen{{overflow:hidden}}
         <div id="drawerTaskSubline" class="drawerSubline">—</div>
         <div id="drawerTaskTimeSignal" class="drawerTimeSignal">—</div>
 
-        <div class="drawerGrid">
-          <div class="drawerBlock"><div class="k">Timing</div><div id="drawerTaskTiming" class="v">—</div></div>
-          <div class="drawerBlock"><div class="k">Responsable</div><div id="drawerTaskOwner" class="v">—</div></div>
-          <div class="drawerBlock"><div class="k">Entreprise</div><div id="drawerTaskCompany" class="v">—</div></div>
-          <div id="drawerNoteBlock" class="drawerBlock" style="grid-column:1 / -1"><div class="k">Notes</div><div id="drawerTaskComment" class="v"></div></div>
+        <div class="drawerInfo">
+          <div class="drawerLine"><div class="k">Timing</div><div id="drawerTaskTiming" class="v">—</div></div>
+          <div class="drawerLine"><div class="k">Responsable</div><div id="drawerTaskOwner" class="v">—</div></div>
+          <div class="drawerLine"><div class="k">Entreprise</div><div id="drawerTaskCompany" class="v">—</div></div>
+          <div id="drawerNoteBlock" class="drawerLine"><div class="k">Notes</div><div id="drawerTaskComment" class="v"></div></div>
         </div>
 
-        <div class="drawerActions">
-          <button id="drawerCopySummaryBtn" type="button" class="drawerBtn">Copier résumé</button>
-          <button id="drawerMarkDoneBtn" type="button" class="drawerBtn primary">Marquer comme traité</button>
-        </div>
         <div class="drawerMeta">ID: <span id="drawerTaskId">—</span></div>
       </div>
     </aside>
