@@ -620,6 +620,81 @@ def companies_email_by_name() -> Dict[str, List[str]]:
     return out
 
 
+def _extract_emails(raw: str) -> List[str]:
+    if not raw:
+        return []
+    found = re.findall(r"[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}", str(raw), flags=re.I)
+    return sorted({m.strip() for m in found if m and "@" in m})
+
+
+def _contacts_by_company_name() -> Dict[str, List[Dict[str, str]]]:
+    c = get_companies()
+    out: Dict[str, List[Dict[str, str]]] = {}
+    for _, r in c.iterrows():
+        name = str(r.get(C_COL_NAME, "") or "").strip()
+        if not name:
+            continue
+        contacts: List[Dict[str, str]] = []
+        for col in c.columns:
+            raw = str(r.get(col, "") or "").strip()
+            if not raw or raw.lower() == "nan":
+                continue
+            # cas standard: "Nom <mail@x>"
+            for m in re.finditer(r"([^<>{}\n\r]+?)\s*<\s*([A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,})\s*>", raw, flags=re.I):
+                nm = re.sub(r"\s+", " ", str(m.group(1) or "").strip(" ;,:-\t"))
+                em = str(m.group(2) or "").strip().lower()
+                if em:
+                    contacts.append({"name": nm, "email": em})
+            # cas alternatifs: "Nom : mail@x" / "Nom - mail@x"
+            for m in re.finditer(r"([^;\n\r,]+?)\s*[:\-]\s*([A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,})", raw, flags=re.I):
+                nm = re.sub(r"\s+", " ", str(m.group(1) or "").strip(" ;,:-\t"))
+                em = str(m.group(2) or "").strip().lower()
+                if em:
+                    contacts.append({"name": nm, "email": em})
+            # fallback: email seul
+            for em in _extract_emails(raw):
+                contacts.append({"name": "", "email": em.lower()})
+
+        dedup: Dict[str, Dict[str, str]] = {}
+        for ct in contacts:
+            em = str(ct.get("email", "") or "").strip().lower()
+            if not em:
+                continue
+            nm = str(ct.get("name", "") or "").strip()
+            old = dedup.get(em, {"name": "", "email": em})
+            if nm and not old.get("name"):
+                old["name"] = nm
+            dedup[em] = old
+        out[_norm_name(name)] = sorted(dedup.values(), key=lambda x: (str(x.get("name", "")).lower(), str(x.get("email", "")).lower()))
+    return out
+
+
+def _project_deployed_people_by_company(project_title: str) -> Dict[str, List[str]]:
+    e = get_entries().copy()
+    if project_title:
+        e = e.loc[_series(e, E_COL_PROJECT_TITLE, "").fillna("").astype(str).str.strip() == project_title].copy()
+    if e.empty:
+        return {}
+
+    e["__company__"] = _series(e, E_COL_COMPANY_TASK, "").fillna("").astype(str).str.strip()
+    e["__owner__"] = _series(e, E_COL_OWNER, "").fillna("").astype(str).str.strip()
+    out: Dict[str, List[str]] = {}
+    for comp, gg in e.groupby("__company__", dropna=False):
+        comp_name = str(comp or "").strip()
+        if not comp_name:
+            continue
+        owners: List[str] = []
+        for raw in gg["__owner__"].tolist():
+            for part in re.split(r"[;,/\|]+", str(raw or "")):
+                val = re.sub(r"\s+", " ", str(part or "").strip())
+                if val and val.lower() != "nan":
+                    owners.append(val)
+        uniq = sorted({x for x in owners if x})
+        if uniq:
+            out[_norm_name(comp_name)] = uniq
+    return out
+
+
 # -------------------------
 # PROJECT INFO
 # -------------------------
@@ -4767,32 +4842,68 @@ def api_meeting_company_mail_draft(
         meet_date = _parse_date_any(mrow.get(M_COL_DATE)) or date.today()
         today_ref = date.today()
 
-        edf = entries_for_meeting(meeting_id).copy()
+        meeting_df = entries_for_meeting(meeting_id).copy()
         if project:
-            edf = edf.loc[_series(edf, E_COL_PROJECT_TITLE, "").fillna("").astype(str).str.strip() == project].copy()
-        if edf.empty:
-            return {"meeting_id": meeting_id, "recipients": [], "recipients_by_company": {}, "draft_text": "Aucune donnée de réunion."}
+            meeting_df = meeting_df.loc[_series(meeting_df, E_COL_PROJECT_TITLE, "").fillna("").astype(str).str.strip() == project].copy()
 
-        edf["__company__"] = _series(edf, E_COL_COMPANY_TASK, "").fillna("").astype(str).str.strip().replace("", "Non renseigné")
+        all_project_df = get_entries().copy()
+        if project:
+            all_project_df = all_project_df.loc[_series(all_project_df, E_COL_PROJECT_TITLE, "").fillna("").astype(str).str.strip() == project].copy()
+        if all_project_df.empty:
+            return {"meeting_id": meeting_id, "recipients": [], "recipients_by_company": {}, "draft_text": "Aucune donnée projet."}
+
+        all_project_df["__company__"] = _series(all_project_df, E_COL_COMPANY_TASK, "").fillna("").astype(str).str.strip().replace("", "Non renseigné")
         selected = [x.strip() for x in str(companies or "").split(",") if x.strip()]
         if selected:
             sel_norm = {_norm_name(x) for x in selected}
-            edf = edf.loc[edf["__company__"].astype(str).apply(lambda v: _norm_name(v) in sel_norm)].copy()
+        else:
+            meeting_companies = sorted({str(c).strip() for c in _series(meeting_df, E_COL_COMPANY_TASK, "").fillna("").astype(str).tolist() if str(c).strip()})
+            sel_norm = {_norm_name(x) for x in meeting_companies}
 
-        if edf.empty:
+        if sel_norm:
+            all_project_df = all_project_df.loc[all_project_df["__company__"].astype(str).apply(lambda v: _norm_name(v) in sel_norm)].copy()
+
+        if all_project_df.empty:
             return {"meeting_id": meeting_id, "recipients": [], "recipients_by_company": {}, "draft_text": "Aucune donnée pour les entreprises sélectionnées."}
 
-        edf = _explode_areas(edf)
-        edf["__is_task__"] = _series(edf, E_COL_IS_TASK, False).apply(_bool_true)
-        edf["__deadline__"] = _series(edf, E_COL_DEADLINE, None).apply(_parse_date_any)
-        edf["__created__"] = _series(edf, E_COL_CREATED, None).apply(_parse_date_any)
-        edf["__completed__"] = _series(edf, E_COL_COMPLETED, False).apply(_bool_true)
+        all_project_df = _explode_areas(all_project_df)
+        all_project_df["__is_task__"] = _series(all_project_df, E_COL_IS_TASK, False).apply(_bool_true)
+        all_project_df["__deadline__"] = _series(all_project_df, E_COL_DEADLINE, None).apply(_parse_date_any)
+        all_project_df["__created__"] = _series(all_project_df, E_COL_CREATED, None).apply(_parse_date_any)
+        all_project_df["__completed__"] = _series(all_project_df, E_COL_COMPLETED, False).apply(_bool_true)
 
         emails_map = companies_email_by_name()
-        recipients_by_company = {
-            comp: emails_map.get(_norm_name(comp), [])
-            for comp in sorted({str(c) for c in edf["__company__"].astype(str).tolist()})
-        }
+        contacts_map = _contacts_by_company_name()
+        deployed_people = _project_deployed_people_by_company(project)
+
+        recipients_by_company: Dict[str, List[str]] = {}
+        recipients_details: Dict[str, List[str]] = {}
+        for comp in sorted({str(c) for c in all_project_df["__company__"].astype(str).tolist()}):
+            key = _norm_name(comp)
+            people_norm = {_norm_name(x) for x in deployed_people.get(key, [])}
+            contacts = contacts_map.get(key, [])
+            targeted: List[str] = []
+            for ct in contacts:
+                nm = str(ct.get("name", "") or "").strip()
+                em = str(ct.get("email", "") or "").strip().lower()
+                if not em:
+                    continue
+                nm_norm = _norm_name(nm)
+                if people_norm and nm_norm:
+                    if nm_norm in people_norm or any((pn and (pn in nm_norm or nm_norm in pn)) for pn in people_norm):
+                        targeted.append(em)
+            base_emails = emails_map.get(key, [])
+            final_emails = sorted({e for e in (targeted if targeted else base_emails) if e})
+            recipients_by_company[comp] = final_emails
+            details = []
+            if deployed_people.get(key):
+                details.append("personnes projet: " + ", ".join(deployed_people.get(key, [])))
+            if targeted:
+                details.append("contacts appariés: " + ", ".join(sorted({str(c.get("name", "")).strip() or c.get("email", "") for c in contacts if str(c.get("email", "")).strip().lower() in set(targeted)})))
+            if not details:
+                details.append("fallback emails entreprise")
+            recipients_details[comp] = details
+
         recipients = sorted({mail for vals in recipients_by_company.values() for mail in vals})
 
         def _line_task(r) -> str:
@@ -4806,64 +4917,49 @@ def api_meeting_company_mail_draft(
             base = f"  • [{area}] {t} | propriétaire: {owner} | créé: {cr} | échéance: {dl} | statut: {st}"
             return base + (f" | commentaire: {cmt}" if cmt else "")
 
-        def _line_memo(r) -> str:
-            t = str(r.get(E_COL_TITLE, "") or "").strip() or "(sans titre)"
-            area = str(r.get("__area_list__", "") or "").strip() or "Général"
-            owner = str(r.get(E_COL_OWNER, "") or "").strip() or "Non attribué"
-            cmt = str(r.get(E_COL_TASK_COMMENT_TEXT, "") or "").strip()
-            base = f"  • [{area}] {t} | auteur: {owner}"
-            return base + (f" | commentaire: {cmt}" if cmt else "")
-
         lines = [
             f"Réunion: {meeting_id}",
             f"Projet: {project}",
             f"Date réunion: {meet_date.isoformat()}",
             f"Date de génération: {today_ref.isoformat()}",
             "",
+            "NB: ce brouillon liste tous les sujets OUVERTS du projet (pas seulement la réunion).",
+            "",
         ]
 
-        for comp, g_comp in edf.groupby("__company__", dropna=False):
+        for comp, g_comp in all_project_df.groupby("__company__", dropna=False):
+            comp = str(comp)
             lines.append(f"=== ENTREPRISE: {comp} ===")
-            lines.append(f"Destinataires détectés: {', '.join(recipients_by_company.get(str(comp), [])) or 'aucun'}")
+            lines.append(f"Destinataires détectés: {', '.join(recipients_by_company.get(comp, [])) or 'aucun'}")
+            for info in recipients_details.get(comp, []):
+                lines.append(f"  - {info}")
             for perimeter, g_per in g_comp.groupby("__area_list__", dropna=False):
                 tasks = g_per.loc[g_per["__is_task__"] == True].copy()
-                memos = g_per.loc[g_per["__is_task__"] == False].copy()
-                reminders = tasks.loc[(tasks["__completed__"] == False) & (tasks["__deadline__"].notna()) & (tasks["__deadline__"] < today_ref)].copy()
-                closed = tasks.loc[tasks["__completed__"] == True].copy()
                 open_all = tasks.loc[tasks["__completed__"] == False].copy()
+                reminders = open_all.loc[(open_all["__deadline__"].notna()) & (open_all["__deadline__"] < today_ref)].copy()
                 new_open = open_all.loc[open_all["__created__"].notna() & (open_all["__created__"] >= meet_date)].copy()
-                open_regular = open_all.drop(new_open.index, errors='ignore')
+
+                if open_all.empty:
+                    continue
 
                 lines.append(f"-- Périmètre: {perimeter if str(perimeter).strip() else 'Général'}")
-                lines.append(f"   KPI: ouverts={len(open_all)} | nouveaux={len(new_open)} | rappels={len(reminders)} | clôturés={len(closed)} | mémos={len(memos)}")
+                lines.append(f"   KPI ouverts projet: ouverts={len(open_all)} | nouveaux_depuis_reunion={len(new_open)} | rappels={len(reminders)}")
 
                 if not reminders.empty:
-                    lines.append("   Rappels:")
+                    lines.append("   Rappels (ouverts):")
                     for _, r in reminders.iterrows():
                         lines.append(_line_task(r))
-                if not new_open.empty:
-                    lines.append("   Nouveaux ouverts:")
-                    for _, r in new_open.iterrows():
-                        lines.append(_line_task(r))
-                if not open_regular.empty:
-                    lines.append("   Ouverts:")
-                    for _, r in open_regular.iterrows():
-                        lines.append(_line_task(r))
-                if not closed.empty:
-                    lines.append("   Clôturés:")
-                    for _, r in closed.iterrows():
-                        lines.append(_line_task(r))
-                if not memos.empty:
-                    lines.append("   Mémos:")
-                    for _, r in memos.iterrows():
-                        lines.append(_line_memo(r))
+
+                lines.append("   Tous les ouverts:")
+                for _, r in open_all.iterrows():
+                    lines.append(_line_task(r))
                 lines.append("")
 
         draft_text = "\n".join(lines).strip()
         return {
             "meeting_id": meeting_id,
             "project": project,
-            "selected_companies": sorted({str(c) for c in edf["__company__"].astype(str).tolist()}),
+            "selected_companies": sorted({str(c) for c in all_project_df["__company__"].astype(str).tolist()}),
             "recipients": recipients,
             "recipients_by_company": recipients_by_company,
             "draft_text": draft_text,
