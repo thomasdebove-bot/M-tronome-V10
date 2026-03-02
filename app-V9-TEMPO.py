@@ -850,6 +850,7 @@ def build_company_email_html(
     project_name = str(meeting.get("project") or "").strip() or "Projet"
     company_name = str(company.get("name") or "").strip() or "Entreprise"
     meeting_txt = _fmt_mail_date(meeting_date)
+    ref_txt = _fmt_mail_date(date.today())
     subject = f"CR Synthèse - {project_name} - Réunion du {meeting_txt}"
 
     def _rank(it: dict) -> int:
@@ -868,11 +869,15 @@ def build_company_email_html(
         return str(value or "").replace("\r\n", "\n").replace("\r", "\n")
     def _cell_text(value: str) -> str:
         return escape(_safe_text(value)).replace("\n", "<br/>")
-    def td(val: str) -> str:
-        return f'<td style="border:1px solid #999;padding:6px;vertical-align:top;">{_cell_text(val)}</td>'
+    def td(val: str, center: bool = False) -> str:
+        align = "center" if center else "left"
+        return f'<td style="border:1px solid #999;padding:6px;vertical-align:top;text-align:{align};">{_cell_text(val)}</td>'
 
     def tr(cells: list[str]) -> str:
-        return "<tr>" + "".join(td(c) for c in cells) + "</tr>"
+        parts = []
+        for idx, c in enumerate(cells):
+            parts.append(td(c, center=(idx > 0)))
+        return "<tr>" + "".join(parts) + "</tr>"
 
     area_map: Dict[str, List[dict]] = {}
     reminders_by_company: Dict[str, int] = {}
@@ -885,18 +890,18 @@ def build_company_email_html(
                 name = str(co or "").strip()
                 if not name:
                     continue
-                reminders_by_company[name] = int(reminders_by_company.get(name, 0)) + max(1, lvl)
+                reminders_by_company[name] = int(reminders_by_company.get(name, 0)) + 1
 
     html_parts: List[str] = []
     html_parts.append('<html><body style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#111;line-height:1.4;">')
     html_parts.append('<p>Bonjour,</p>')
-    html_parts.append(f'<p>Veuillez trouver ci-après les sujets listés en réunion du {escape(meeting_txt)}.</p>')
+    html_parts.append(f"<p>Veuillez trouver ci-après la liste des sujets déployés à la date du {escape(ref_txt)} sur l'application METRONOME.</p>")
     html_parts.append('<p>&nbsp;</p>')
 
     rappels_lines = [f"{co} : {cnt} rappel(s)" for co, cnt in sorted(reminders_by_company.items(), key=lambda kv: _norm_name(kv[0])) if int(cnt) >= 1]
     if not rappels_lines:
         rappels_lines = ["Aucun rappel"]
-    html_parts.append('<p><b><u>Rappels en cours :</u></b><br/>' + '<br/>'.join(_cell_text(x) for x in rappels_lines) + '</p>')
+    html_parts.append('<p><b><u>Rappels en cours :</u></b><br/>' + '<br/>'.join(f'<span style="color:#b91c1c;font-weight:700">{_cell_text(x)}</span>' for x in rappels_lines) + '</p>')
 
     for area in sorted(area_map.keys(), key=lambda x: _norm_name(x)):
         rows = sorted(
@@ -911,15 +916,15 @@ def build_company_email_html(
         if not rows:
             continue
 
-        html_parts.append(f'<p><b><u>Périmètre {escape(str(area))} :</u></b></p>')
+        html_parts.append(f'<p><b><u>{escape(str(area))}</u></b></p>')
 
         header = (
             '<thead><tr style="background:#efefef;">'
             '<th style="border:1px solid #999;padding:6px;text-align:left;">Sujet</th>'
-            '<th style="border:1px solid #999;padding:6px;text-align:left;">Écrit le</th>'
-            '<th style="border:1px solid #999;padding:6px;text-align:left;">Pour le</th>'
-            '<th style="border:1px solid #999;padding:6px;text-align:left;">Fait le</th>'
-            '<th style="border:1px solid #999;padding:6px;text-align:left;">Concerne</th>'
+            '<th style="border:1px solid #999;padding:6px;text-align:center;">Écrit le</th>'
+            '<th style="border:1px solid #999;padding:6px;text-align:center;">Pour le</th>'
+            '<th style="border:1px solid #999;padding:6px;text-align:center;">Fait le</th>'
+            '<th style="border:1px solid #999;padding:6px;text-align:center;">Concerne</th>'
             '</tr></thead>'
         )
 
@@ -927,12 +932,12 @@ def build_company_email_html(
         for it in rows:
             sujet = _short_text(str(it.get("subject") or "(sans titre)"), 160)
             ecrit_le = _fmt_mail_date(it.get("created_date"))
-            pour_le = "/" if str(it.get("type") or "") == "memo" else _fmt_mail_date(it.get("due_date"))
+            pour_le = "" if str(it.get("type") or "") == "memo" else _fmt_mail_date(it.get("due_date"))
             if str(it.get("type") or "") == "reminder":
                 rl = int(it.get("reminder_level") or 1)
                 fait_le = f"RAPPEL {rl}"
             else:
-                fait_le = str(it.get("done_label") or "").strip() or "/"
+                fait_le = str(it.get("done_label") or "").strip() or ""
             concerne = ", ".join([str(x).strip() for x in (it.get("concerne") or []) if str(x).strip()]) or company_name
             rows_html.append(tr([sujet, ecrit_le, pour_le, fait_le, concerne]))
 
@@ -3009,11 +3014,6 @@ async function generateCompanyMailDraft(){
   if(preview) preview.srcdoc = data.html || '';
 }
 
-function copyMailDraft(){
-  const body = document.getElementById('mailBody')?.value || '';
-  navigator.clipboard.writeText(body).catch(()=>{});
-}
-
 async function refreshDashboard(){
   const meeting = document.getElementById('meeting')?.value || '';
   const project = document.getElementById('project')?.value || '';
@@ -3179,15 +3179,14 @@ select{{width:100%;padding:12px 12px;border-radius:12px;border:1px solid var(--b
 .small{{font-size:12px;color:var(--muted);font-weight:700}}
 .empty{{color:var(--muted);font-style:italic}}
 .mailModal{{position:fixed;inset:0;background:rgba(0,0,0,.35);display:none;align-items:center;justify-content:center;z-index:10050}}
-.mailPanel{{background:#fff;width:min(1180px,96vw);max-height:94vh;overflow:auto;border:1px solid var(--border);border-radius:14px;box-shadow:0 20px 50px rgba(2,6,23,.2);padding:14px}}
-.mailGrid{{display:grid;grid-template-columns:minmax(240px,32%) minmax(420px,68%);gap:12px}}
+.mailPanel{{background:#fff;width:min(1420px,99vw);max-height:97vh;overflow:auto;border:1px solid var(--border);border-radius:14px;box-shadow:0 20px 50px rgba(2,6,23,.2);padding:16px}}
+.mailGrid{{display:grid;grid-template-columns:minmax(260px,30%) minmax(700px,70%);gap:14px}}
 .mailField{{display:grid;gap:6px}}
 .mailField label{{margin:0;font-size:12px;color:var(--muted)}}
 .mailField textarea,.mailField select{{width:100%;padding:10px;border-radius:10px;border:1px solid var(--border);font:13px/1.4 system-ui,-apple-system,Segoe UI,Roboto,Arial;}}
 #mailCompanySelect{{height:190px}}
 #mailBody{{min-height:520px;font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre;tab-size:2}}
-.mailActions{{display:flex;gap:8px;justify-content:flex-end;margin-top:10px;flex-wrap:wrap}}
-#mailPreview{{width:100%;min-height:320px;border:1px solid var(--border);border-radius:10px;background:#fff}}
+#mailPreview{{width:100%;min-height:640px;border:1px solid var(--border);border-radius:10px;background:#fff}}
 
 
 .drawerOverlay{{position:fixed;inset:0;background:rgba(15,23,42,.22);z-index:10040;opacity:0;pointer-events:none;transition:opacity .16s ease}}
@@ -3315,7 +3314,7 @@ body.drawerOpen{{overflow:hidden}}
 
   <div class="mailModal" id="mailModal">
     <div class="mailPanel">
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px"><div style="font-weight:1000">Mail entreprises (compte-rendu)</div><button class="btnLite" type="button" onclick="closeCompanyMailModal()">Fermer</button></div>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px"><div style="font-weight:1000">Mail entreprises</div><button class="btnLite" type="button" onclick="closeCompanyMailModal()">Fermer</button></div>
       <div class="mailGrid">
         <div class="mailField">
           <label><input id="mailAllCompanies" type="checkbox" checked /> Toutes les entreprises (sinon sélection multiple)</label>
@@ -3326,9 +3325,6 @@ body.drawerOpen{{overflow:hidden}}
           <label>Aperçu mail</label>
           <iframe id="mailPreview" title="Aperçu email"></iframe>
         </div>
-      </div>
-      <div class="mailActions">
-        <button class="btnLite" type="button" onclick="copyMailDraft()">Copier HTML</button>
       </div>
     </div>
   </div>
@@ -5186,7 +5182,7 @@ def api_meeting_company_mail_draft(
                 done_label = f"RAPPEL {rem_lvl}"
             elif is_task and not is_completed:
                 itype = "open"
-                done_label = "/"
+                done_label = ""
             elif is_task and is_completed:
                 row_meeting = str(r.get(E_COL_MEETING_ID, "") or "").strip()
                 if row_meeting != str(meeting_id):
@@ -5195,7 +5191,7 @@ def api_meeting_company_mail_draft(
                 done_label = _fmt_mail_date(done_date)
             else:
                 itype = "memo"
-                done_label = "/"
+                done_label = ""
 
             items_all.append({
                 "type": itype,
@@ -5217,7 +5213,7 @@ def api_meeting_company_mail_draft(
             app_url="https://app.atelier-tempo.fr",
         )
         text_fallback = (
-            f"Bonjour,\n\nVeuillez trouver ci-après les sujets listés en réunion du {_fmt_mail_date(meeting_date)}.\n"
+            f"Bonjour,\n\nVeuillez trouver ci-après la liste des sujets déployés à la date du {_fmt_mail_date(date.today())} sur l'application METRONOME.\n"
             "(Version texte. Utiliser le HTML pour un rendu complet.)"
         )
         return {
