@@ -2148,6 +2148,63 @@ Statut: ${it.status || ''}
 Jours restants: ${leftTxt}`;
 }
 
+const TITLE_COL_KEY = 'metronome_title_column_width';
+function getTitleColWidth(){
+  const saved = Number(localStorage.getItem(TITLE_COL_KEY) || '320');
+  if(Number.isFinite(saved) && saved >= 260 && saved <= 600) return saved;
+  return 320;
+}
+function isResizeEnabled(){
+  return window.innerWidth >= 1200;
+}
+function applyTitleColWidth(px){
+  const viewport = document.getElementById('timelineViewport');
+  if(!viewport) return;
+  const width = isResizeEnabled() ? Math.max(260, Math.min(600, px)) : 300;
+  viewport.style.setProperty('--title-col-width', `${width}px`);
+  const split = document.getElementById('timelineSplitter');
+  if(split){ split.style.left = `${width - 3}px`; }
+}
+function bindTimelineResizer(){
+  const viewport = document.getElementById('timelineViewport');
+  const splitter = document.getElementById('timelineSplitter');
+  const guide = document.getElementById('timelineSplitGuide');
+  if(!viewport || !splitter || !guide) return;
+  const enabled = isResizeEnabled();
+  splitter.style.display = enabled ? 'block' : 'none';
+  if(!enabled){
+    applyTitleColWidth(300);
+    return;
+  }
+  applyTitleColWidth(getTitleColWidth());
+  if(splitter.dataset.bound === '1') return;
+  splitter.dataset.bound = '1';
+  let dragging = false;
+  splitter.addEventListener('mousedown', (e) => {
+    dragging = true;
+    viewport.classList.add('resizing');
+    guide.style.display = 'block';
+    e.preventDefault();
+  });
+  window.addEventListener('mousemove', (e) => {
+    if(!dragging) return;
+    const rect = viewport.getBoundingClientRect();
+    const next = e.clientX - rect.left;
+    const clamped = Math.max(260, Math.min(600, next));
+    viewport.style.setProperty('--title-col-width', `${clamped}px`);
+    splitter.style.left = `${clamped - 3}px`;
+    guide.style.left = `${clamped - 1}px`;
+  });
+  window.addEventListener('mouseup', () => {
+    if(!dragging) return;
+    dragging = false;
+    viewport.classList.remove('resizing');
+    guide.style.display = 'none';
+    const current = Number((viewport.style.getPropertyValue('--title-col-width') || '320').replace('px',''));
+    if(Number.isFinite(current)) localStorage.setItem(TITLE_COL_KEY, String(current));
+  });
+}
+
 let __tlTipEl = null;
 function ensureTimelineTooltip(){
   if(__tlTipEl) return __tlTipEl;
@@ -2287,16 +2344,16 @@ function renderTimeline(data){
   }).join('');
 
   timelineEl.innerHTML = `
-    <div class="gViewport" id="timelineViewport">
+    <div class="gViewport" id="timelineViewport" style="--title-col-width:320px">
       <div class="gTop" id="timelineRoot" data-start="${startIso}" data-end="${endIso}" data-view-start="${viewStart.toISOString().slice(0,10)}" data-px-per-day="${pxPerDay}">
         <div class="gTopRight" style="width:${totalWidth}px"><div class="gTicks">${ticksHtml}</div></div>
       </div>
-      <div class="gBody">
+      <div class="gBody"><div id="timelineSplitGuide" class="splitGuide"></div>
         <div class="meetingBg" style="left:${Math.max(0, meetLeft-8)}px"></div><div class="meetingLine" style="left:${meetLeft}px"><span>Réunion</span></div>
         <div class="todayLine" style="left:${Math.max(0, Math.floor((today - startDate)/86400000)*pxPerDay)}px"></div>
         ${sectionsHtml}
       </div>
-    </div>
+    <div id="timelineSplitter" class="timelineSplitter" aria-hidden="true"></div></div>
     ${fullCount>window.__tlMaxRows ? `<div class='small' style='margin-top:6px'>Lazy mode actif: ${Math.min(window.__tlMaxRows, fullCount)}/${fullCount} tâches affichées. <button class="btnLite" type="button" onclick="window.__tlMaxRows += 120; renderTimeline(window.__homeDashboardData || null)">Charger +120</button></div>` : ''}`;
 
   const viewport = document.getElementById('timelineViewport');
@@ -2306,6 +2363,7 @@ function renderTimeline(data){
   }
   enableTimelineDragScroll();
   bindTimelineTooltips();
+  bindTimelineResizer();
 }
 
 async function refreshDashboard(){
@@ -2390,8 +2448,14 @@ select{{width:100%;padding:12px 12px;border-radius:12px;border:1px solid var(--b
 .timelineZoom input[type=range]{{width:110px}}
 .timelineZoomLabel{{font-size:12px;font-weight:900;color:var(--muted);min-width:100px}}
 .gantt{{border:1px solid var(--border);border-radius:12px;background:#fff;padding:10px;overflow:hidden}}
-.gViewport{{overflow:auto;max-height:64vh;border:1px solid var(--border);border-radius:10px;scrollbar-gutter:stable both-edges;cursor:grab;scroll-behavior:smooth}}
+.gViewport{{overflow:auto;max-height:64vh;border:1px solid var(--border);border-radius:10px;scrollbar-gutter:stable both-edges;cursor:grab;scroll-behavior:smooth;position:relative}}
 .gViewport.dragging{{cursor:grabbing}}
+.timelineSplitter{{position:absolute;top:34px;bottom:0;width:6px;cursor:col-resize;z-index:6;background:transparent;transition:background .15s ease}}
+.timelineSplitter:hover{{background:rgba(15,23,42,.08)}}
+.splitGuide{{position:absolute;top:0;bottom:0;width:2px;background:rgba(15,23,42,.18);display:none;z-index:6;pointer-events:none}}
+.gViewport.resizing .splitGuide{{display:block}}
+.gViewport.resizing .timelineSplitter{{background:rgba(15,23,42,.12)}}
+@media (max-width:1199px){{.timelineSplitter,.splitGuide{{display:none!important}}.gViewport{{--title-col-width:300px!important}}}}
 .gTop{{min-width:max-content;position:sticky;top:0;z-index:2;background:#fff}}
 .gTopRight{{position:relative;height:34px;border-bottom:1px solid var(--border);background:#f8fafc}}
 .gTicks{{position:relative;height:100%}}
@@ -2399,7 +2463,7 @@ select{{width:100%;padding:12px 12px;border-radius:12px;border:1px solid var(--b
 .gTick span{{padding:0 6px;text-overflow:ellipsis;overflow:hidden}}
 .gBody{{min-width:max-content;position:relative}}
 .todayLine{{position:absolute;top:0;bottom:0;width:2px;background:#dc2626;opacity:.9;z-index:1}}
-.gRow{{min-width:max-content;display:grid;grid-template-columns:320px 1fr;align-items:center}}
+.gRow{{min-width:max-content;display:grid;grid-template-columns:var(--title-col-width,320px) 1fr;align-items:center}}
 .gItemCol{{position:sticky;left:0;z-index:4;background:#fff;border-right:1px solid #eef2f7;padding:6px 10px;height:100%}}
 .gTitleLine{{display:flex;align-items:center;gap:6px;min-width:0}}
 .gTitle{{font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block}}
