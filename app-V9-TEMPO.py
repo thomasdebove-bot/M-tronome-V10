@@ -902,9 +902,11 @@ def build_company_email_html(
     html_parts: List[str] = []
     html_parts.append('<html><body style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#111;line-height:1.4;">')
     html_parts.append('<p>Bonjour,</p>')
-    html_parts.append(f"<p>Veuillez trouver ci-après la liste des sujets ouverts déployés à la date du {escape(ref_txt)} sur l'application METRONOME pour les entreprises sélectionnées:</p>")
+    selected_company_count = int(meeting.get("selected_company_count") or 0)
+    ent_label = "entreprise suivante" if selected_company_count == 1 else "entreprises suivantes"
+    html_parts.append(f"<p>Veuillez trouver ci-après la liste des sujets ouverts déployés à la date du {escape(ref_txt)} sur l'application METRONOME pour les {ent_label}:</p>")
     rappels_lines = [
-        f"<b>{_cell_text(co)}</b> : {_cell_text(str(cnt))} rappel(s) en cours"
+        f"<b>{_cell_text(co)}</b> : {_cell_text(str(cnt))} {'rappel' if int(cnt) == 1 else 'rappels'} en cours"
         for co, cnt in sorted(reminders_by_company.items(), key=lambda kv: _norm_name(kv[0]))
         if int(cnt) >= 1
     ]
@@ -3030,7 +3032,8 @@ async function generateCompanyMailDraft(){
   const incMemos = document.getElementById('mailIncludeMemos')?.checked ? '1' : '0';
   const incRem = document.getElementById('mailIncludeReminders')?.checked ? '1' : '0';
   const incClosed = document.getElementById('mailIncludeClosed')?.checked ? '1' : '0';
-  const url = `/api/meeting_company_mail_draft?meeting_id=${encodeURIComponent(meeting)}&project=${encodeURIComponent(project)}&selected_companies=${encodeURIComponent(companies.join(','))}&all_companies=${allCompanies}&period_start=${encodeURIComponent(pStart)}&period_end=${encodeURIComponent(pEnd)}&include_tasks=${incTasks}&include_memos=${incMemos}&include_reminders=${incRem}&include_closed=${incClosed}`;
+  const incWithoutCreated = document.getElementById('mailIncludeWithoutCreated')?.checked ? '1' : '0';
+  const url = `/api/meeting_company_mail_draft?meeting_id=${encodeURIComponent(meeting)}&project=${encodeURIComponent(project)}&selected_companies=${encodeURIComponent(companies.join(','))}&all_companies=${allCompanies}&period_start=${encodeURIComponent(pStart)}&period_end=${encodeURIComponent(pEnd)}&include_tasks=${incTasks}&include_memos=${incMemos}&include_reminders=${incRem}&include_closed=${incClosed}&include_without_created=${incWithoutCreated}`;
   const res = await fetch(url);
   const data = await res.json();
   if(data.error){ alert(data.error); return; }
@@ -3088,6 +3091,7 @@ window.addEventListener('DOMContentLoaded', () => {
   const incMemos = document.getElementById('mailIncludeMemos');
   const incRem = document.getElementById('mailIncludeReminders');
   const incClosed = document.getElementById('mailIncludeClosed');
+  const incWithoutCreated = document.getElementById('mailIncludeWithoutCreated');
   if(allChk) allChk.addEventListener('change', () => { toggleMailCompanyMode(); generateCompanyMailDraft(); });
   if(sel) sel.addEventListener('change', generateCompanyMailDraft);
   if(pStart) pStart.addEventListener('change', generateCompanyMailDraft);
@@ -3096,6 +3100,7 @@ window.addEventListener('DOMContentLoaded', () => {
   if(incMemos) incMemos.addEventListener('change', generateCompanyMailDraft);
   if(incRem) incRem.addEventListener('change', generateCompanyMailDraft);
   if(incClosed) incClosed.addEventListener('change', generateCompanyMailDraft);
+  if(incWithoutCreated) incWithoutCreated.addEventListener('change', generateCompanyMailDraft);
   refreshDashboard();
 });
 """
@@ -3362,7 +3367,7 @@ body.drawerOpen{{overflow:hidden}}
         <div class="mailField">
           <label><input id="mailAllCompanies" type="checkbox" checked /> Toutes les entreprises (sinon sélection multiple)</label>
           <div class="mailPeriodRow"><label>Du <input id="mailPeriodStart" type="date" /></label><label>Au <input id="mailPeriodEnd" type="date" /></label></div>
-          <div class="mailTypeRow"><label><input id="mailIncludeTasks" type="checkbox" checked /> Tâches</label><label><input id="mailIncludeMemos" type="checkbox" checked /> Mémos</label><label><input id="mailIncludeReminders" type="checkbox" checked /> Rappels</label><label><input id="mailIncludeClosed" type="checkbox" checked /> Tâches clôturées</label></div>
+          <div class="mailTypeRow"><label><input id="mailIncludeTasks" type="checkbox" checked /> Tâches</label><label><input id="mailIncludeMemos" type="checkbox" checked /> Mémos</label><label><input id="mailIncludeReminders" type="checkbox" checked /> Rappels</label><label><input id="mailIncludeClosed" type="checkbox" checked /> Tâches clôturées</label><label><input id="mailIncludeWithoutCreated" type="checkbox" checked /> Inclure hors réunion (sans écrit le)</label></div>
           <select id="mailCompanySelect" multiple></select>
         </div>
         <div class="mailField">
@@ -5131,6 +5136,7 @@ def api_meeting_company_mail_draft(
     include_memos: bool = Query(default=True),
     include_reminders: bool = Query(default=True),
     include_closed: bool = Query(default=True),
+    include_without_created: bool = Query(default=True),
 ):
     try:
         mrow = meeting_row(meeting_id)
@@ -5234,6 +5240,9 @@ def api_meeting_company_mail_draft(
             done_date = r.get("__done_date__")
             rem_lvl = 0
 
+            if (not include_without_created) and (not isinstance(created_date, date)):
+                continue
+
             if (not is_task) and not include_memos:
                 continue
 
@@ -5301,14 +5310,15 @@ def api_meeting_company_mail_draft(
             })
 
         subject, html = build_company_email_html(
-            meeting={"project": project, "meeting_id": meeting_id},
+            meeting={"project": project, "meeting_id": meeting_id, "selected_company_count": len(target_companies)},
             company={"name": "Toutes les entreprises" if len(target_companies) > 1 else target_companies[0]},
             items=items_all,
             meeting_date=meeting_date,
             app_url="https://app.atelier-tempo.fr",
         )
+        ent_label_txt = "entreprise suivante" if len(target_companies) == 1 else "entreprises suivantes"
         text_fallback = (
-            f"Bonjour,\n\nVeuillez trouver ci-après la liste des sujets ouverts déployés à la date du {_fmt_mail_date(date.today())} sur l'application METRONOME pour les entreprises sélectionnées.\n"
+            f"Bonjour,\n\nVeuillez trouver ci-après la liste des sujets ouverts déployés à la date du {_fmt_mail_date(date.today())} sur l'application METRONOME pour les {ent_label_txt}.\n"
             "(Version texte. Utiliser le HTML pour un rendu complet.)"
         )
         return {
