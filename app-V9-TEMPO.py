@@ -902,7 +902,7 @@ def build_company_email_html(
     html_parts: List[str] = []
     html_parts.append('<html><body style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#111;line-height:1.4;">')
     html_parts.append('<p>Bonjour,</p>')
-    html_parts.append(f"<p>Veuillez trouver ci-après la liste des sujets ouverts déployés à la date du {escape(ref_txt)} (aujourd'hui) sur l'application METRONOME.</p>")
+    html_parts.append(f"<p>Veuillez trouver ci-après la liste des sujets ouverts déployés à la date du {escape(ref_txt)} sur l'application METRONOME pour les entreprises sélectionnées.</p>")
     html_parts.append('<p>&nbsp;</p>')
 
     rappels_lines = [f"{co} : {cnt} rappel(s)" for co, cnt in sorted(reminders_by_company.items(), key=lambda kv: _norm_name(kv[0])) if int(cnt) >= 1]
@@ -939,7 +939,7 @@ def build_company_email_html(
         for it in rows:
             sujet = str(it.get("subject") or "(sans titre)")
             ecrit_le = _fmt_mail_date(it.get("created_date"))
-            pour_le = "/" if str(it.get("type") or "") == "memo" else _fmt_mail_date(it.get("due_date"))
+            pour_le = "PM" if str(it.get("type") or "") == "memo" else _fmt_mail_date(it.get("due_date"))
             is_reminder = str(it.get("type") or "") == "reminder"
             if is_reminder:
                 rl = int(it.get("reminder_level") or 1)
@@ -968,7 +968,7 @@ def build_company_email_html(
     html_parts.append(
         "<p><b>Téléchargez gratuitement l'application de gestion de projet METRONOME.</b><br/>"
         "Celle-ci vous permettra de retrouver l'intégralité des réunions de synthèse, comptes rendu, planning et suivi des tâches depuis votre smartphone ou votre ordinateur.<br/>"
-        f'Pour un suivi optimal, nous vous invitons à mettre à jour ou commenter vos tâches sur <a href="{escape(footer_url)}" target="_blank" rel="noopener">{escape(footer_label)}</a></p>'
+        f'Pour un suivi optimal, nous vous invitons à mettre à jour ou commenter vos tâches ouvertes/mémos sur <a href="{escape(footer_url)}" target="_blank" rel="noopener">{escape(footer_label)}</a></p>'
     )
     html_parts.append('<p>Vous en souhaitant bonne réception,</p>')
     html_parts.append('</body></html>')
@@ -5306,7 +5306,7 @@ def api_meeting_company_mail_draft(
             app_url="https://app.atelier-tempo.fr",
         )
         text_fallback = (
-            f"Bonjour,\n\nVeuillez trouver ci-après la liste des sujets ouverts déployés à la date du {_fmt_mail_date(date.today())} (aujourd'hui) sur l'application METRONOME.\n"
+            f"Bonjour,\n\nVeuillez trouver ci-après la liste des sujets ouverts déployés à la date du {_fmt_mail_date(date.today())} sur l'application METRONOME pour les entreprises sélectionnées.\n"
             "(Version texte. Utiliser le HTML pour un rendu complet.)"
         )
         return {
