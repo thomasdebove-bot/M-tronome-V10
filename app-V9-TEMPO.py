@@ -28,6 +28,7 @@ import re
 import urllib.parse
 import urllib.request
 import smtplib
+from html import escape
 from datetime import date, timedelta
 from email.message import EmailMessage
 from typing import Dict, List, Optional, Tuple
@@ -849,9 +850,21 @@ def build_company_email_html(
             return 0
         if tp == "open":
             return 1
-        if tp == "done":
+        if tp == "memo":
             return 2
-        return 3
+        if tp == "done":
+            return 3
+        return 9
+
+    def _safe_text(value: str) -> str:
+        return str(value or "").replace("\r\n", "\n").replace("\r", "\n")
+    def _cell_text(value: str) -> str:
+        return escape(_safe_text(value)).replace("\n", "<br/>")
+    def td(val: str) -> str:
+        return f'<td style="border:1px solid #999;padding:6px;vertical-align:top;">{_cell_text(val)}</td>'
+
+    def tr(cells: list[str]) -> str:
+        return "<tr>" + "".join(td(c) for c in cells) + "</tr>"
 
     area_map: Dict[str, List[dict]] = {}
     reminders_count = 0
@@ -861,18 +874,14 @@ def build_company_email_html(
         if str(it.get("type") or "") == "reminder":
             reminders_count += 1
 
-    html_parts = [
-        '<html><body style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#111;line-height:1.4;">',
-        '<p>Bonjour,</p>',
-        f'<p>Veuillez trouver ci-après les sujets listés en réunion du {meeting_txt}.</p>',
-        '<p>&nbsp;</p>',
-        '<p><b><u>Rappels en cours :</u></b><br/>',
-    ]
-    if reminders_count > 0:
-        html_parts.append(f'{_escape(company_name)} : {reminders_count} rappel(s)')
-    else:
-        html_parts.append('Aucun rappel')
-    html_parts.append('</p>')
+    html_parts: List[str] = []
+    html_parts.append('<html><body style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#111;line-height:1.4;">')
+    html_parts.append('<p>Bonjour,</p>')
+    html_parts.append(f'<p>Veuillez trouver ci-après les sujets listés en réunion du {escape(meeting_txt)}.</p>')
+    html_parts.append('<p>&nbsp;</p>')
+
+    rappels_lines = [f"{company_name} : {reminders_count} rappel(s)"] if reminders_count > 0 else ["Aucun rappel"]
+    html_parts.append('<p><b><u>Rappels en cours :</u></b><br/>' + '<br/>'.join(_cell_text(x) for x in rappels_lines) + '</p>')
 
     for area in sorted(area_map.keys(), key=lambda x: _norm_name(x)):
         rows = sorted(
@@ -887,39 +896,48 @@ def build_company_email_html(
         if not rows:
             continue
 
-        html_parts.append(f'<p><b><u>Périmètre { _escape(area) } :</u></b></p>')
-        html_parts.append('<table style="width:100%;border-collapse:collapse;border:1px solid #999;">')
-        html_parts.append('<thead><tr style="background:#efefef;">')
-        for th in ["Sujet", "Écrit le", "Pour le", "Fait le", "Concerne"]:
-            html_parts.append(f'<th style="border:1px solid #999;padding:6px;text-align:left;">{th}</th>')
-        html_parts.append('</tr></thead><tbody>')
+        html_parts.append(f'<p><b><u>Périmètre {escape(str(area))} :</u></b></p>')
 
+        header = (
+            '<thead><tr style="background:#efefef;">'
+            '<th style="border:1px solid #999;padding:6px;text-align:left;">Sujet</th>'
+            '<th style="border:1px solid #999;padding:6px;text-align:left;">Écrit le</th>'
+            '<th style="border:1px solid #999;padding:6px;text-align:left;">Pour le</th>'
+            '<th style="border:1px solid #999;padding:6px;text-align:left;">Fait le</th>'
+            '<th style="border:1px solid #999;padding:6px;text-align:left;">Concerne</th>'
+            '</tr></thead>'
+        )
+
+        rows_html: List[str] = []
         for it in rows:
-            subject_txt = _escape(_short_text(str(it.get("subject") or "(sans titre)"), 160))
-            created_txt = _escape(_fmt_mail_date(it.get("created_date")))
-            due_txt = _escape(_fmt_mail_date(it.get("due_date"))) if str(it.get("type") or "") != "memo" else "/"
-            done_val = str(it.get("done_label") or "").strip() or "/"
+            sujet = _short_text(str(it.get("subject") or "(sans titre)"), 160)
+            ecrit_le = _fmt_mail_date(it.get("created_date"))
+            pour_le = "/" if str(it.get("type") or "") == "memo" else _fmt_mail_date(it.get("due_date"))
+            fait_le = str(it.get("done_label") or "").strip() or "/"
             concerne = ", ".join([str(x).strip() for x in (it.get("concerne") or []) if str(x).strip()]) or company_name
-            html_parts.append('<tr>')
-            html_parts.append(f'<td style="border:1px solid #999;padding:6px;">{subject_txt}</td>')
-            html_parts.append(f'<td style="border:1px solid #999;padding:6px;">{created_txt}</td>')
-            html_parts.append(f'<td style="border:1px solid #999;padding:6px;">{_escape(due_txt)}</td>')
-            html_parts.append(f'<td style="border:1px solid #999;padding:6px;">{_escape(done_val)}</td>')
-            html_parts.append(f'<td style="border:1px solid #999;padding:6px;">{_escape(concerne)}</td>')
-            html_parts.append('</tr>')
+            rows_html.append(tr([sujet, ecrit_le, pour_le, fait_le, concerne]))
 
-        html_parts.append('</tbody></table>')
+        table_html = (
+            '<table style="width:100%;border-collapse:collapse;border:1px solid #999;">'
+            + header
+            + '<tbody>'
+            + ''.join(rows_html)
+            + '</tbody></table>'
+        )
+        html_parts.append(table_html)
         html_parts.append('<p>&nbsp;</p>')
 
-    html_parts.extend([
-        "<p><b>Téléchargez gratuitement l'application de gestion de projet METRONOME.</b><br/>",
-        "Celle-ci vous permettra de retrouver l'intégralité des réunions de synthèse, comptes rendu, planning et suivi des tâches depuis votre smartphone ou votre ordinateur.<br/>",
-        f'<a href="{_escape(app_url)}" target="_blank" rel="noopener">{_escape(app_url.replace("https://", "").replace("http://", ""))}</a></p>',
-        '<p>Vous en souhaitant bonne réception,</p>',
-        '</body></html>',
-    ])
+    footer_url = str(app_url or "https://app.atelier-tempo.fr").strip()
+    footer_label = footer_url.replace("https://", "").replace("http://", "")
+    html_parts.append(
+        "<p><b>Téléchargez gratuitement l'application de gestion de projet METRONOME.</b><br/>"
+        "Celle-ci vous permettra de retrouver l'intégralité des réunions de synthèse, comptes rendu, planning et suivi des tâches depuis votre smartphone ou votre ordinateur.<br/>"
+        f'<a href="{escape(footer_url)}" target="_blank" rel="noopener">{escape(footer_label)}</a></p>'
+    )
+    html_parts.append('<p>Vous en souhaitant bonne réception,</p>')
+    html_parts.append('</body></html>')
 
-    html = "".join(html_parts)
+    html = ''.join(html_parts)
     return subject, html
 
 
@@ -2944,9 +2962,11 @@ function openCompanyMailModal(){
   const rec = document.getElementById('mailRecipients');
   const body = document.getElementById('mailBody');
   const details = document.getElementById('mailRecipientDetails');
+  const preview = document.getElementById('mailPreview');
   if(rec) rec.value = '';
   if(body) body.value = '';
   if(details) details.textContent = '';
+  if(preview) preview.srcdoc = '';
   modal.style.display = 'flex';
   generateCompanyMailDraft();
 }
@@ -2977,8 +2997,10 @@ async function generateCompanyMailDraft(){
   const rec = document.getElementById('mailRecipients');
   const body = document.getElementById('mailBody');
   const details = document.getElementById('mailRecipientDetails');
+  const preview = document.getElementById('mailPreview');
   if(rec) rec.value = (data.emails_detected || []).join('; ');
   if(body) body.value = data.html || '';
+  if(preview) preview.srcdoc = data.html || '';
   if(details){
     const byCo = data.emails_by_company || {};
     const keys = Object.keys(byCo);
@@ -3165,6 +3187,7 @@ select{{width:100%;padding:12px 12px;border-radius:12px;border:1px solid var(--b
 #mailBody{{min-height:520px;font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre;tab-size:2}}
 #mailRecipientDetails{{white-space:pre-wrap;font-size:12px;color:var(--muted);background:var(--soft);border:1px solid var(--border);border-radius:10px;padding:8px;max-height:140px;overflow:auto}}
 .mailActions{{display:flex;gap:8px;justify-content:flex-end;margin-top:10px;flex-wrap:wrap}}
+#mailPreview{{width:100%;min-height:320px;border:1px solid var(--border);border-radius:10px;background:#fff}}
 
 
 .drawerOverlay{{position:fixed;inset:0;background:rgba(15,23,42,.22);z-index:10040;opacity:0;pointer-events:none;transition:opacity .16s ease}}
@@ -3304,6 +3327,8 @@ body.drawerOpen{{overflow:hidden}}
           <div id="mailRecipientDetails"></div>
           <label>HTML mail prêt à copier-coller</label>
           <textarea id="mailBody" rows="20"></textarea>
+          <label>Aperçu HTML</label>
+          <iframe id="mailPreview" title="Aperçu email"></iframe>
         </div>
       </div>
       <div class="mailActions">
