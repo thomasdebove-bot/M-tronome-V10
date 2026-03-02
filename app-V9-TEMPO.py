@@ -4118,6 +4118,8 @@ def api_home_meeting_dashboard(
                     "package_color": _timeline_package_color(package_label),
                     "company": str(r.get("__company__", "Non renseigné")),
                     "owner": str(r.get(E_COL_OWNER, "") or "").strip() or "Non attribué",
+                    "task_id": str(r.get(E_COL_ID, "") or "").strip(),
+                    "comment": str(r.get(E_COL_TASK_COMMENT_TEXT, "") or "").strip(),
                     "meeting_id": str(r.get(E_COL_MEETING_ID, "") or "").strip(),
                     "meeting_linked": str(r.get(E_COL_MEETING_ID, "") or "").strip() == str(meeting_id),
                     "completed": bool(r.get("__completed__", False)),
