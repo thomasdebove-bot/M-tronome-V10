@@ -27,11 +27,13 @@ import os
 import re
 import urllib.parse
 import urllib.request
+import smtplib
 from datetime import date, timedelta
+from email.message import EmailMessage
 from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse, JSONResponse
 
 app = FastAPI(title="TEMPO • CR Synthèse (METRONOME)")
@@ -2756,7 +2758,7 @@ select{{width:100%;padding:12px 12px;border-radius:12px;border:1px solid var(--b
 .drawerHead{{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:14px 16px;border-bottom:1px solid var(--border);font-weight:1000}}
 .drawerClose{{border:1px solid var(--border);background:#fff;border-radius:10px;width:32px;height:32px;font-size:18px;font-weight:900;cursor:pointer}}
 .drawerBody{{padding:16px 18px 14px;overflow:auto;display:grid;gap:12px;background:#fff}}
-.drawerTitle{{font-size:20px;line-height:1.26;font-weight:800;margin:0;word-break:break-word;letter-spacing:-.005em}}
+.drawerTitle{{font-size:18px;line-height:1.28;font-weight:700;margin:0;word-break:break-word;letter-spacing:-.003em}}
 .drawerSubline{{font-size:14px;color:#64748b;font-weight:700}}
 .drawerTimeSignal{{font-size:14px;font-weight:900;background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:8px 10px;display:inline-flex;max-width:max-content}}
 .drawerInfo{{display:grid;gap:6px}}
@@ -4149,7 +4151,8 @@ def api_quality(
         mrow = meeting_row(meeting_id)
         edf = entries_for_meeting(meeting_id)
         project = (project or str(mrow.get(M_COL_PROJECT_TITLE, ""))).strip()
-        ref_date = _parse_date_any(mrow.get(M_COL_DATE)) or date.today()
+        meeting_date = _parse_date_any(mrow.get(M_COL_DATE)) or date.today()
+        ref_date = date.today()
         rem_df = reminders_for_project(project_title=project, ref_date=ref_date, max_level=8)
         fol_df = followups_for_project(project_title=project, ref_date=ref_date, exclude_entry_ids=set())
 
@@ -4480,7 +4483,127 @@ def api_home_meeting_dashboard(
                 "company_closed_reminders": closed_company_counts,
             },
             "reference_date": ref_date.isoformat(),
+            "meeting_date": meeting_date.isoformat(),
         }
+    except MissingDataError as err:
+        return JSONResponse(
+            {"error": str(err), "label": err.label, "path": err.path, "env_var": err.env_var},
+            status_code=503,
+        )
+    except Exception as ex:
+        return JSONResponse({"error": str(ex)}, status_code=500)
+
+
+@app.post("/api/meeting_package_email", response_class=JSONResponse)
+def api_meeting_package_email(
+    meeting_id: str = Query(...),
+    package: str = Query(...),
+    recipients: str = Query(..., description="Comma-separated emails"),
+    project: str = Query(default=""),
+    send_email: bool = Query(default=False),
+):
+    try:
+        mrow = meeting_row(meeting_id)
+        project = (project or str(mrow.get(M_COL_PROJECT_TITLE, ""))).strip()
+        meeting_date = _parse_date_any(mrow.get(M_COL_DATE)) or date.today()
+        today_ref = date.today()
+
+        edf = entries_for_meeting(meeting_id).copy()
+        if project:
+            edf = edf.loc[_series(edf, E_COL_PROJECT_TITLE, "").fillna("").astype(str).str.strip() == project].copy()
+        if edf.empty:
+            return {"meeting_id": meeting_id, "package": package, "rows": 0, "message": "Aucune donnée pour la réunion/projet."}
+
+        edf = _explode_packages(edf)
+        pkg = (package or "").strip()
+        if pkg:
+            edf = edf.loc[edf["__package_list__"].astype(str).str.strip() == pkg].copy()
+        if edf.empty:
+            return {"meeting_id": meeting_id, "package": package, "rows": 0, "message": "Aucune entrée pour ce lot."}
+
+        edf["__is_task__"] = _series(edf, E_COL_IS_TASK, False).apply(_bool_true)
+        edf["__deadline__"] = _series(edf, E_COL_DEADLINE, None).apply(_parse_date_any)
+        edf["__completed__"] = _series(edf, E_COL_COMPLETED, False).apply(_bool_true)
+        edf["__company__"] = _series(edf, E_COL_COMPANY_TASK, "").fillna("").astype(str).str.strip().replace("", "Non renseigné")
+
+        tasks = edf.loc[edf["__is_task__"] == True].copy()
+        memos = edf.loc[edf["__is_task__"] == False].copy()
+        reminders = tasks.loc[(tasks["__completed__"] == False) & (tasks["__deadline__"].notna()) & (tasks["__deadline__"] < today_ref)].copy()
+        opened = tasks.loc[tasks["__completed__"] == False].copy()
+        closed = tasks.loc[tasks["__completed__"] == True].copy()
+
+        def _task_row_payload(r):
+            dl = r.get("__deadline__")
+            return {
+                "id": str(r.get(E_COL_ID, "") or "").strip(),
+                "title": str(r.get(E_COL_TITLE, "") or "").strip(),
+                "area": str(r.get(E_COL_AREAS, "") or "").strip(),
+                "company": str(r.get("__company__", "") or "").strip(),
+                "owner": str(r.get(E_COL_OWNER, "") or "").strip(),
+                "deadline": dl.isoformat() if isinstance(dl, date) else "",
+                "status": str(r.get(E_COL_STATUS, "") or "").strip(),
+                "comment": str(r.get(E_COL_TASK_COMMENT_TEXT, "") or "").strip(),
+                "completed": bool(r.get("__completed__", False)),
+            }
+
+        def _memo_row_payload(r):
+            return {
+                "id": str(r.get(E_COL_ID, "") or "").strip(),
+                "title": str(r.get(E_COL_TITLE, "") or "").strip(),
+                "area": str(r.get(E_COL_AREAS, "") or "").strip(),
+                "company": str(r.get("__company__", "") or "").strip(),
+                "owner": str(r.get(E_COL_OWNER, "") or "").strip(),
+                "status": str(r.get(E_COL_STATUS, "") or "").strip(),
+                "comment": str(r.get(E_COL_TASK_COMMENT_TEXT, "") or "").strip(),
+            }
+
+        payload = {
+            "meeting_id": str(meeting_id),
+            "project": project,
+            "meeting_date": meeting_date.isoformat(),
+            "generated_at": today_ref.isoformat(),
+            "package": pkg or "Sans lot",
+            "kpis": {
+                "tasks_total": int(len(tasks)),
+                "opened_total": int(len(opened)),
+                "closed_total": int(len(closed)),
+                "reminders_total": int(len(reminders)),
+                "memos_total": int(len(memos)),
+            },
+            "tasks_opened": [_task_row_payload(r) for _, r in opened.iterrows()],
+            "tasks_closed": [_task_row_payload(r) for _, r in closed.iterrows()],
+            "tasks_reminders": [_task_row_payload(r) for _, r in reminders.iterrows()],
+            "memos": [_memo_row_payload(r) for _, r in memos.iterrows()],
+        }
+
+        recips = [x.strip() for x in str(recipients or "").split(",") if x.strip()]
+        if not send_email:
+            return {"dry_run": True, "recipients": recips, "payload": payload}
+
+        smtp_host = os.getenv("METRONOME_SMTP_HOST", "").strip()
+        smtp_port = int(os.getenv("METRONOME_SMTP_PORT", "587") or "587")
+        smtp_user = os.getenv("METRONOME_SMTP_USER", "").strip()
+        smtp_pass = os.getenv("METRONOME_SMTP_PASS", "").strip()
+        smtp_from = os.getenv("METRONOME_SMTP_FROM", smtp_user).strip()
+        use_tls = os.getenv("METRONOME_SMTP_TLS", "1").strip() not in {"0", "false", "False"}
+
+        if not smtp_host or not smtp_from or not recips:
+            return JSONResponse({"error": "Configuration SMTP ou destinataires manquants.", "payload": payload}, status_code=400)
+
+        msg = EmailMessage()
+        msg["Subject"] = f"[METRONOME] Réunion {meeting_id} • Lot {payload['package']}"
+        msg["From"] = smtp_from
+        msg["To"] = ", ".join(recips)
+        msg.set_content(json.dumps(payload, ensure_ascii=False, indent=2))
+
+        with smtplib.SMTP(smtp_host, smtp_port, timeout=20) as server:
+            if use_tls:
+                server.starttls()
+            if smtp_user:
+                server.login(smtp_user, smtp_pass)
+            server.send_message(msg)
+
+        return {"sent": True, "recipients": recips, "kpis": payload["kpis"]}
     except MissingDataError as err:
         return JSONResponse(
             {"error": str(err), "label": err.label, "path": err.path, "env_var": err.env_var},
