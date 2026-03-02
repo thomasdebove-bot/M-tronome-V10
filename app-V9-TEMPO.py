@@ -828,6 +828,14 @@ def _companies_concerned_for_row(r: pd.Series, concern_cols: List[str]) -> List[
     return uniq
 
 
+def _clean_area_name(area: str) -> str:
+    txt = re.sub(r"\s+", " ", str(area or "").strip())
+    if not txt:
+        return "Généralité"
+    txt = re.sub(r"^niveau\s+[^-:|]+[-:|]\s*", "", txt, flags=re.I).strip()
+    return txt or "Généralité"
+
+
 def build_company_email_html(
     meeting: dict,
     company: dict,
@@ -867,12 +875,17 @@ def build_company_email_html(
         return "<tr>" + "".join(td(c) for c in cells) + "</tr>"
 
     area_map: Dict[str, List[dict]] = {}
-    reminders_count = 0
+    reminders_by_company: Dict[str, int] = {}
     for it in items:
-        area = str(it.get("area") or "Généralité").strip() or "Généralité"
+        area = _clean_area_name(str(it.get("area") or "Généralité"))
         area_map.setdefault(area, []).append(it)
         if str(it.get("type") or "") == "reminder":
-            reminders_count += 1
+            lvl = int(it.get("reminder_level") or 1)
+            for co in (it.get("concerne") or []):
+                name = str(co or "").strip()
+                if not name:
+                    continue
+                reminders_by_company[name] = int(reminders_by_company.get(name, 0)) + max(1, lvl)
 
     html_parts: List[str] = []
     html_parts.append('<html><body style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#111;line-height:1.4;">')
@@ -880,7 +893,9 @@ def build_company_email_html(
     html_parts.append(f'<p>Veuillez trouver ci-après les sujets listés en réunion du {escape(meeting_txt)}.</p>')
     html_parts.append('<p>&nbsp;</p>')
 
-    rappels_lines = [f"{company_name} : {reminders_count} rappel(s)"] if reminders_count > 0 else ["Aucun rappel"]
+    rappels_lines = [f"{co} : {cnt} rappel(s)" for co, cnt in sorted(reminders_by_company.items(), key=lambda kv: _norm_name(kv[0])) if int(cnt) >= 1]
+    if not rappels_lines:
+        rappels_lines = ["Aucun rappel"]
     html_parts.append('<p><b><u>Rappels en cours :</u></b><br/>' + '<br/>'.join(_cell_text(x) for x in rappels_lines) + '</p>')
 
     for area in sorted(area_map.keys(), key=lambda x: _norm_name(x)):
@@ -913,17 +928,15 @@ def build_company_email_html(
             sujet = _short_text(str(it.get("subject") or "(sans titre)"), 160)
             ecrit_le = _fmt_mail_date(it.get("created_date"))
             pour_le = "/" if str(it.get("type") or "") == "memo" else _fmt_mail_date(it.get("due_date"))
-            fait_le = str(it.get("done_label") or "").strip() or "/"
+            if str(it.get("type") or "") == "reminder":
+                rl = int(it.get("reminder_level") or 1)
+                fait_le = f"RAPPEL {rl}"
+            else:
+                fait_le = str(it.get("done_label") or "").strip() or "/"
             concerne = ", ".join([str(x).strip() for x in (it.get("concerne") or []) if str(x).strip()]) or company_name
             rows_html.append(tr([sujet, ecrit_le, pour_le, fait_le, concerne]))
 
-        table_html = (
-            '<table style="width:100%;border-collapse:collapse;border:1px solid #999;">'
-            + header
-            + '<tbody>'
-            + ''.join(rows_html)
-            + '</tbody></table>'
-        )
+        table_html = '<table style="width:100%;border-collapse:collapse;border:1px solid #999;">' + header + '<tbody>' + ''.join(rows_html) + '</tbody></table>'
         html_parts.append(table_html)
         html_parts.append('<p>&nbsp;</p>')
 
@@ -2959,13 +2972,9 @@ function openCompanyMailModal(){
   sel.innerHTML = companies.map(c => `<option value="${c}">${c}</option>`).join('');
   if(allChk) allChk.checked = true;
   toggleMailCompanyMode();
-  const rec = document.getElementById('mailRecipients');
   const body = document.getElementById('mailBody');
-  const details = document.getElementById('mailRecipientDetails');
   const preview = document.getElementById('mailPreview');
-  if(rec) rec.value = '';
   if(body) body.value = '';
-  if(details) details.textContent = '';
   if(preview) preview.srcdoc = '';
   modal.style.display = 'flex';
   generateCompanyMailDraft();
@@ -2994,18 +3003,10 @@ async function generateCompanyMailDraft(){
   const res = await fetch(url);
   const data = await res.json();
   if(data.error){ alert(data.error); return; }
-  const rec = document.getElementById('mailRecipients');
   const body = document.getElementById('mailBody');
-  const details = document.getElementById('mailRecipientDetails');
   const preview = document.getElementById('mailPreview');
-  if(rec) rec.value = (data.emails_detected || []).join('; ');
   if(body) body.value = data.html || '';
   if(preview) preview.srcdoc = data.html || '';
-  if(details){
-    const byCo = data.emails_by_company || {};
-    const keys = Object.keys(byCo);
-    details.textContent = keys.length ? keys.map(k => `${k}: ${(byCo[k] || []).join(', ') || 'aucun email'}`).join('\n') : 'Aucun email trouvé pour la sélection.';
-  }
 }
 
 function copyMailDraft(){
@@ -3185,7 +3186,6 @@ select{{width:100%;padding:12px 12px;border-radius:12px;border:1px solid var(--b
 .mailField textarea,.mailField select{{width:100%;padding:10px;border-radius:10px;border:1px solid var(--border);font:13px/1.4 system-ui,-apple-system,Segoe UI,Roboto,Arial;}}
 #mailCompanySelect{{height:190px}}
 #mailBody{{min-height:520px;font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre;tab-size:2}}
-#mailRecipientDetails{{white-space:pre-wrap;font-size:12px;color:var(--muted);background:var(--soft);border:1px solid var(--border);border-radius:10px;padding:8px;max-height:140px;overflow:auto}}
 .mailActions{{display:flex;gap:8px;justify-content:flex-end;margin-top:10px;flex-wrap:wrap}}
 #mailPreview{{width:100%;min-height:320px;border:1px solid var(--border);border-radius:10px;background:#fff}}
 
@@ -3322,12 +3322,8 @@ body.drawerOpen{{overflow:hidden}}
           <select id="mailCompanySelect" multiple></select>
         </div>
         <div class="mailField">
-          <label>Destinataires (emails)</label>
-          <textarea id="mailRecipients" rows="4" placeholder="emails détectés automatiquement"></textarea>
-          <div id="mailRecipientDetails"></div>
-          <label>HTML mail prêt à copier-coller</label>
-          <textarea id="mailBody" rows="20"></textarea>
-          <label>Aperçu HTML</label>
+          <textarea id="mailBody" rows="20" style="display:none"></textarea>
+          <label>Aperçu mail</label>
           <iframe id="mailPreview" title="Aperçu email"></iframe>
         </div>
       </div>
@@ -5148,94 +5144,76 @@ def api_meeting_company_mail_draft(
             base_emails = sorted({e.lower() for e in emails_map.get(key, []) if e})
             recipients_by_company[comp] = sorted(set(matched_company_emails or users_emails or base_emails))
 
-        concern_cols = [
-            col for col in all_project_df.columns
-            if (
-                "concerne" in str(col).lower()
-                or "concern" in str(col).lower()
-                or "entreprise" in str(col).lower()
-                or "company" in str(col).lower()
-            )
-        ]
-        if E_COL_COMPANY_TASK not in concern_cols:
-            concern_cols.append(E_COL_COMPANY_TASK)
+        concern_cols = [col for col in all_project_df.columns if ("concerne" in str(col).lower() or "concerned" in str(col).lower() or "concern" in str(col).lower())]
 
-        drafts_by_company: Dict[str, Dict[str, str]] = {}
-        for comp in target_companies:
-            comp_norm = _norm_name(comp)
-            items: List[dict] = []
-            for _, r in all_project_df.iterrows():
-                concerne = _companies_concerned_for_row(r, concern_cols)
-                concerne_norm = {_norm_name(x) for x in concerne}
-                if not concerne_norm or comp_norm not in concerne_norm:
+        target_norm = {_norm_name(x): x for x in target_companies}
+        items_all: List[dict] = []
+        for _, r in all_project_df.iterrows():
+            concerne_raw = _companies_concerned_for_row(r, concern_cols)
+            concerne_filtered = []
+            seen_cf = set()
+            for c in concerne_raw:
+                n = _norm_name(c)
+                if n in target_norm and n not in seen_cf:
+                    seen_cf.add(n)
+                    concerne_filtered.append(target_norm[n])
+            if not concerne_filtered:
+                continue
+
+            is_task = bool(r.get("__is_task__", False))
+            is_completed = bool(r.get("__completed__", False))
+            due_date = r.get("__deadline__")
+            created_date = r.get("__created__")
+            done_date = r.get("__done_date__")
+            rem_lvl = 0
+
+            if is_task and not is_completed and isinstance(due_date, date) and due_date < meeting_date:
+                itype = "reminder"
+                rem_lvl = int(reminder_level(due_date, False, meeting_date) or 1)
+                done_label = f"RAPPEL {rem_lvl}"
+            elif is_task and not is_completed:
+                itype = "open"
+                done_label = "/"
+            elif is_task and is_completed:
+                row_meeting = str(r.get(E_COL_MEETING_ID, "") or "").strip()
+                if row_meeting != str(meeting_id):
                     continue
+                itype = "done"
+                done_label = _fmt_mail_date(done_date)
+            else:
+                itype = "memo"
+                done_label = "/"
 
-                is_task = bool(r.get("__is_task__", False))
-                is_completed = bool(r.get("__completed__", False))
-                due_date = r.get("__deadline__")
-                created_date = r.get("__created__")
-                done_date = r.get("__done_date__")
+            items_all.append({
+                "type": itype,
+                "subject": str(r.get(E_COL_TITLE, "") or "").strip() or "(sans titre)",
+                "created_date": created_date,
+                "due_date": due_date,
+                "done_date": done_date,
+                "done_label": done_label,
+                "concerne": concerne_filtered,
+                "area": _clean_area_name(str(r.get("__area_list__", "") or "").strip() or "Généralité"),
+                "reminder_level": rem_lvl,
+            })
 
-                if is_task and not is_completed and isinstance(due_date, date) and due_date < meeting_date:
-                    itype = "reminder"
-                    done_label = "RAPPEL"
-                elif is_task and not is_completed:
-                    itype = "open"
-                    done_label = "/"
-                elif is_task and is_completed:
-                    row_meeting = str(r.get(E_COL_MEETING_ID, "") or "").strip()
-                    if row_meeting != str(meeting_id):
-                        continue
-                    itype = "done"
-                    done_label = _fmt_mail_date(done_date)
-                else:
-                    itype = "memo"
-                    done_label = "/"
-
-                items.append({
-                    "type": itype,
-                    "subject": str(r.get(E_COL_TITLE, "") or "").strip() or "(sans titre)",
-                    "created_date": created_date,
-                    "due_date": due_date,
-                    "done_date": done_date,
-                    "done_label": done_label,
-                    "concerne": concerne,
-                    "area": str(r.get("__area_list__", "") or "").strip() or "Généralité",
-                })
-
-            subject, html = build_company_email_html(
-                meeting={"project": project, "meeting_id": meeting_id},
-                company={"name": comp},
-                items=items,
-                meeting_date=meeting_date,
-                app_url="https://app.atelier-tempo.fr",
-            )
-            text_fallback = (
-                f"Bonjour,\n\nVeuillez trouver ci-après les sujets listés en réunion du {_fmt_mail_date(meeting_date)}.\n"
-                "(Version texte. Utiliser le HTML pour un rendu complet.)"
-            )
-            drafts_by_company[comp] = {
-                "subject": subject,
-                "html": html,
-                "text_fallback": text_fallback,
-            }
-
-        primary_company = target_companies[0]
-        emails_detected = sorted(set(recipients_by_company.get(primary_company, []) or []))
-        by_company_label = {
-            comp: (recipients_by_company.get(comp, []) or [])
-            for comp in target_companies
-        }
+        subject, html = build_company_email_html(
+            meeting={"project": project, "meeting_id": meeting_id},
+            company={"name": "Toutes les entreprises" if len(target_companies) > 1 else target_companies[0]},
+            items=items_all,
+            meeting_date=meeting_date,
+            app_url="https://app.atelier-tempo.fr",
+        )
+        text_fallback = (
+            f"Bonjour,\n\nVeuillez trouver ci-après les sujets listés en réunion du {_fmt_mail_date(meeting_date)}.\n"
+            "(Version texte. Utiliser le HTML pour un rendu complet.)"
+        )
         return {
             "meeting_id": meeting_id,
             "project": project,
             "selected_companies": target_companies,
-            "emails_detected": emails_detected,
-            "subject": drafts_by_company[primary_company]["subject"],
-            "html": drafts_by_company[primary_company]["html"],
-            "text_fallback": drafts_by_company[primary_company]["text_fallback"],
-            "emails_by_company": by_company_label,
-            "drafts_by_company": drafts_by_company,
+            "subject": subject,
+            "html": html,
+            "text_fallback": text_fallback,
         }
     except MissingDataError as err:
         return JSONResponse(
