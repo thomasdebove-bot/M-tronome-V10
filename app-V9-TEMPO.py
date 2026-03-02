@@ -2088,7 +2088,10 @@ function escHtml(v){
 
 function drawerValue(v){
   const txt = String(v ?? '').trim();
-  return txt || '—';
+  if(!txt) return '—';
+  const low = txt.toLowerCase();
+  if(low === 'nan' || low === 'null' || low === 'none' || low === 'undefined') return '—';
+  return txt;
 }
 
 function closeTimelineDrawer(){
@@ -2099,22 +2102,72 @@ function closeTimelineDrawer(){
   document.body.classList.remove('drawerOpen');
 }
 
+function drawerTimeSignal(task){
+  const refIso = (window.__homeDashboardData?.reference_date || '').trim();
+  const endIso = String(task.end || '').trim();
+  const statusRaw = String(task.status || '').trim().toLowerCase();
+  const isClosed = task.completed === true || task.completed === 'true' || statusRaw === 'clos';
+  if(!refIso || !endIso) return '—';
+  const ref = new Date(refIso + 'T00:00:00');
+  const end = new Date(endIso + 'T00:00:00');
+  if(isNaN(ref) || isNaN(end)) return '—';
+  const diff = Math.ceil((end - ref)/86400000);
+  if(diff < 0 && !isClosed) return `🔴 En retard de ${Math.abs(diff)} jour${Math.abs(diff)>1?'s':''}`;
+  if(diff > 0) return `🟡 Échéance dans ${diff} jour${diff>1?'s':''}`;
+  return isClosed ? '🟢 Traité' : '🟡 Échéance aujourd’hui';
+}
+
 function openTimelineDrawer(task){
   const overlay = document.getElementById('taskDrawerOverlay');
   if(!overlay) return;
+  const title = drawerValue(task.title);
+  const area = drawerValue(task.area);
+  const pack = drawerValue(task.package);
+  const status = drawerValue(task.status);
+  const owner = drawerValue(task.owner);
+  const company = drawerValue(task.company);
+  const startTxt = drawerValue(task.start_txt);
+  const endTxt = drawerValue(task.end_txt);
+  const comment = drawerValue(task.comment);
+  const taskId = drawerValue(task.task_id);
+  const subtitle = [area, pack, status].join(' • ');
   const setText = (id, value) => {
     const el = document.getElementById(id);
-    if(el) el.textContent = drawerValue(value);
+    if(el) el.textContent = value;
   };
-  setText('drawerTaskId', task.task_id);
-  setText('drawerTaskTitle', task.title);
-  setText('drawerTaskArea', task.area);
-  setText('drawerTaskPackage', task.package);
-  setText('drawerTaskStart', task.start_txt);
-  setText('drawerTaskEnd', task.end_txt);
-  setText('drawerTaskStatus', task.status);
-  setText('drawerTaskOwner', task.owner);
-  setText('drawerTaskComment', task.comment);
+  setText('drawerTaskTitle', title);
+  setText('drawerTaskSubline', subtitle);
+  setText('drawerTaskTimeSignal', drawerTimeSignal(task));
+  setText('drawerTaskTiming', `${startTxt} → ${endTxt}`);
+  setText('drawerTaskOwner', owner);
+  setText('drawerTaskCompany', company);
+
+  const noteBlock = document.getElementById('drawerNoteBlock');
+  const noteEl = document.getElementById('drawerTaskComment');
+  if(noteBlock && noteEl){
+    if(comment === '—'){
+      noteBlock.style.display = 'none';
+      noteEl.textContent = '';
+    } else {
+      noteBlock.style.display = '';
+      noteEl.textContent = comment;
+    }
+  }
+
+  const idEl = document.getElementById('drawerTaskId');
+  if(idEl) idEl.textContent = taskId;
+
+  const copyBtn = document.getElementById('drawerCopySummaryBtn');
+  if(copyBtn){
+    copyBtn.dataset.summary = `Titre: ${title}
+Contexte: ${subtitle}
+Timing: ${startTxt} → ${endTxt}
+Signal: ${drawerTimeSignal(task)}
+Responsable: ${owner}
+Entreprise: ${company}${comment !== '—' ? `
+Notes: ${comment}` : ''}`;
+  }
+
   overlay.classList.add('open');
   overlay.setAttribute('aria-hidden', 'false');
   document.body.classList.add('drawerOpen');
@@ -2130,6 +2183,28 @@ function bindTimelineDrawer(){
   window.addEventListener('keydown', (e) => {
     if(e.key === 'Escape') closeTimelineDrawer();
   });
+  const copyBtn = document.getElementById('drawerCopySummaryBtn');
+  if(copyBtn){
+    copyBtn.addEventListener('click', async () => {
+      const txt = copyBtn.dataset.summary || '';
+      if(!txt) return;
+      try {
+        await navigator.clipboard.writeText(txt);
+        copyBtn.textContent = 'Résumé copié';
+        window.setTimeout(() => { copyBtn.textContent = 'Copier résumé'; }, 1200);
+      } catch(_e){
+        copyBtn.textContent = 'Copie impossible';
+        window.setTimeout(() => { copyBtn.textContent = 'Copier résumé'; }, 1200);
+      }
+    });
+  }
+  const markBtn = document.getElementById('drawerMarkDoneBtn');
+  if(markBtn){
+    markBtn.addEventListener('click', () => {
+      markBtn.textContent = 'Traitement marqué (bientôt)';
+      window.setTimeout(() => { markBtn.textContent = 'Marquer comme traité'; }, 1200);
+    });
+  }
 }
 
 function bindTimelineBarClicks(){
@@ -2146,7 +2221,10 @@ function bindTimelineBarClicks(){
         end_txt: bar.dataset.taskEnd,
         status: bar.dataset.taskStatus,
         owner: bar.dataset.taskOwner,
+        company: bar.dataset.taskCompany,
         comment: bar.dataset.taskComment,
+        end: bar.dataset.taskEndIso,
+        completed: bar.dataset.taskCompleted,
       });
     });
   });
@@ -2444,7 +2522,7 @@ function renderTimeline(data){
             ${detail}
           </div>
           <div class="gTrack" style="width:${totalWidth}px">
-            <div class="gBar ${cls} ${meetingFx}" style="left:${left}px;width:${width}px" data-tip="${tip.replaceAll('"','&quot;')}" data-task-id="${escHtml(it.task_id)}" data-task-title="${escHtml(taskTitle)}" data-task-area="${escHtml(it.area || '')}" data-task-package="${escHtml(it.package || '')}" data-task-start="${escHtml(it.start_txt || '')}" data-task-end="${escHtml(it.end_txt || '')}" data-task-status="${escHtml(it.status || '')}" data-task-owner="${escHtml(it.owner || '')}" data-task-comment="${escHtml(it.comment || '')}">
+            <div class="gBar ${cls} ${meetingFx}" style="left:${left}px;width:${width}px" data-tip="${tip.replaceAll('"','&quot;')}" data-task-id="${escHtml(it.task_id)}" data-task-title="${escHtml(taskTitle)}" data-task-area="${escHtml(it.area || '')}" data-task-package="${escHtml(it.package || '')}" data-task-start="${escHtml(it.start_txt || '')}" data-task-end="${escHtml(it.end_txt || '')}" data-task-status="${escHtml(it.status || '')}" data-task-owner="${escHtml(it.owner || '')}" data-task-company="${escHtml(it.company || '')}" data-task-comment="${escHtml(it.comment || '')}" data-task-end-iso="${escHtml(it.end || '')}" data-task-completed="${String(!!it.completed)}">
               <span class="barTitle">${taskTitle}</span>
             </div>
           </div>
@@ -2637,14 +2715,22 @@ select{{width:100%;padding:12px 12px;border-radius:12px;border:1px solid var(--b
 
 .drawerOverlay{{position:fixed;inset:0;background:rgba(15,23,42,.22);z-index:10040;opacity:0;pointer-events:none;transition:opacity .16s ease}}
 .drawerOverlay.open{{opacity:1;pointer-events:auto}}
-.taskDrawer{{position:fixed;top:0;right:0;height:100vh;width:min(460px,92vw);background:#fff;border-left:1px solid var(--border);box-shadow:-8px 0 28px rgba(2,6,23,.2);transform:translateX(100%);transition:transform .18s ease;display:flex;flex-direction:column}}
+.taskDrawer{{position:fixed;top:0;right:0;height:100vh;width:min(520px,95vw);background:#fff;border-left:1px solid var(--border);box-shadow:-8px 0 28px rgba(2,6,23,.2);transform:translateX(100%);transition:transform .18s ease;display:flex;flex-direction:column}}
 .drawerOverlay.open .taskDrawer{{transform:translateX(0)}}
 .drawerHead{{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:14px 16px;border-bottom:1px solid var(--border);font-weight:1000}}
 .drawerClose{{border:1px solid var(--border);background:#fff;border-radius:10px;width:32px;height:32px;font-size:18px;font-weight:900;cursor:pointer}}
-.drawerBody{{padding:14px 16px;overflow:auto;display:grid;gap:10px}}
-.drawerField{{display:grid;gap:4px}}
-.drawerLabel{{font-size:12px;font-weight:900;color:var(--muted);text-transform:uppercase;letter-spacing:.02em}}
-.drawerValue{{font-weight:700;white-space:pre-wrap;word-break:break-word}}
+.drawerBody{{padding:14px 16px;overflow:auto;display:grid;gap:12px}}
+.drawerTitle{{font-size:34px;line-height:1.18;font-weight:1000;margin:0;word-break:break-word}}
+.drawerSubline{{font-size:13px;color:var(--muted);font-weight:800}}
+.drawerTimeSignal{{font-size:14px;font-weight:900;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:8px 10px;display:inline-flex;max-width:max-content}}
+.drawerGrid{{display:grid;grid-template-columns:1fr 1fr;gap:10px}}
+.drawerBlock{{border:1px solid var(--border);border-radius:10px;padding:10px;background:#fff}}
+.drawerBlock .k{{font-size:11px;color:var(--muted);font-weight:900;margin-bottom:4px;text-transform:uppercase;letter-spacing:.02em}}
+.drawerBlock .v{{font-size:14px;font-weight:800;word-break:break-word;white-space:pre-wrap}}
+.drawerActions{{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;border-top:1px solid var(--border);padding-top:10px}}
+.drawerBtn{{border:1px solid var(--border);background:#fff;border-radius:10px;padding:9px 12px;font-weight:900;cursor:pointer}}
+.drawerBtn.primary{{background:var(--accent);color:#fff}}
+.drawerMeta{{font-size:11px;color:var(--muted);font-weight:700;text-align:right}}
 body.drawerOpen{{overflow:hidden}}
 
 </style>
@@ -2734,15 +2820,22 @@ body.drawerOpen{{overflow:hidden}}
     <aside class="taskDrawer" role="dialog" aria-modal="true" aria-label="Détail tâche">
       <div class="drawerHead"><span>Détail tâche</span><button type="button" class="drawerClose" data-drawer-close="1" aria-label="Fermer">×</button></div>
       <div class="drawerBody">
-        <div class="drawerField"><div class="drawerLabel">ID</div><div id="drawerTaskId" class="drawerValue">—</div></div>
-        <div class="drawerField"><div class="drawerLabel">Titre</div><div id="drawerTaskTitle" class="drawerValue">—</div></div>
-        <div class="drawerField"><div class="drawerLabel">Zone</div><div id="drawerTaskArea" class="drawerValue">—</div></div>
-        <div class="drawerField"><div class="drawerLabel">Lot</div><div id="drawerTaskPackage" class="drawerValue">—</div></div>
-        <div class="drawerField"><div class="drawerLabel">Date début</div><div id="drawerTaskStart" class="drawerValue">—</div></div>
-        <div class="drawerField"><div class="drawerLabel">Date fin</div><div id="drawerTaskEnd" class="drawerValue">—</div></div>
-        <div class="drawerField"><div class="drawerLabel">Statut</div><div id="drawerTaskStatus" class="drawerValue">—</div></div>
-        <div class="drawerField"><div class="drawerLabel">Responsable</div><div id="drawerTaskOwner" class="drawerValue">—</div></div>
-        <div class="drawerField"><div class="drawerLabel">Commentaires</div><div id="drawerTaskComment" class="drawerValue">—</div></div>
+        <h2 id="drawerTaskTitle" class="drawerTitle">—</h2>
+        <div id="drawerTaskSubline" class="drawerSubline">—</div>
+        <div id="drawerTaskTimeSignal" class="drawerTimeSignal">—</div>
+
+        <div class="drawerGrid">
+          <div class="drawerBlock"><div class="k">Timing</div><div id="drawerTaskTiming" class="v">—</div></div>
+          <div class="drawerBlock"><div class="k">Responsable</div><div id="drawerTaskOwner" class="v">—</div></div>
+          <div class="drawerBlock"><div class="k">Entreprise</div><div id="drawerTaskCompany" class="v">—</div></div>
+          <div id="drawerNoteBlock" class="drawerBlock" style="grid-column:1 / -1"><div class="k">Notes</div><div id="drawerTaskComment" class="v"></div></div>
+        </div>
+
+        <div class="drawerActions">
+          <button id="drawerCopySummaryBtn" type="button" class="drawerBtn">Copier résumé</button>
+          <button id="drawerMarkDoneBtn" type="button" class="drawerBtn primary">Marquer comme traité</button>
+        </div>
+        <div class="drawerMeta">ID: <span id="drawerTaskId">—</span></div>
       </div>
     </aside>
   </div>
