@@ -598,6 +598,28 @@ def companies_logo_by_name() -> Dict[str, str]:
     return out
 
 
+def companies_email_by_name() -> Dict[str, List[str]]:
+    c = get_companies()
+    email_cols = [col for col in c.columns if "mail" in str(col).lower() or "email" in str(col).lower()]
+    out: Dict[str, List[str]] = {}
+    for _, r in c.iterrows():
+        name = str(r.get(C_COL_NAME, "")).strip()
+        if not name:
+            continue
+        emails: List[str] = []
+        for col in email_cols:
+            raw = str(r.get(col, "") or "").strip()
+            if not raw or raw.lower() == "nan":
+                continue
+            for part in re.split(r"[;,\s]+", raw):
+                v = part.strip()
+                if v and "@" in v:
+                    emails.append(v)
+        uniq = sorted({e for e in emails})
+        out[_norm_name(name)] = uniq
+    return out
+
+
 # -------------------------
 # PROJECT INFO
 # -------------------------
@@ -2592,6 +2614,67 @@ function renderTimeline(data){
   bindTimelineBarClicks();
 }
 
+function _uniqueCompaniesFromDashboard(){
+  const data = window.__homeDashboardData || {};
+  const fromKpi = (data.kpis?.company_cumulative || []).map(x => String(x.name || '').trim()).filter(Boolean);
+  const fromTimeline = (data.timeline || []).map(x => String(x.company || '').trim()).filter(Boolean);
+  const merged = [...fromKpi, ...fromTimeline];
+  return Array.from(new Set(merged)).sort((a,b) => a.localeCompare(b,'fr'));
+}
+
+function openCompanyMailModal(){
+  const modal = document.getElementById('mailModal');
+  const sel = document.getElementById('mailCompanySelect');
+  const allChk = document.getElementById('mailAllCompanies');
+  if(!modal || !sel) return;
+  const companies = _uniqueCompaniesFromDashboard();
+  sel.innerHTML = companies.map(c => `<option value="${c}">${c}</option>`).join('');
+  if(allChk) allChk.checked = true;
+  const rec = document.getElementById('mailRecipients');
+  const body = document.getElementById('mailBody');
+  if(rec) rec.value = '';
+  if(body) body.value = '';
+  modal.style.display = 'flex';
+}
+
+function closeCompanyMailModal(){
+  const modal = document.getElementById('mailModal');
+  if(modal) modal.style.display = 'none';
+}
+
+function selectedCompaniesForMail(){
+  const sel = document.getElementById('mailCompanySelect');
+  const allChk = document.getElementById('mailAllCompanies');
+  if(allChk?.checked) return [];
+  if(!sel) return [];
+  return Array.from(sel.selectedOptions || []).map(o => o.value).filter(Boolean);
+}
+
+async function generateCompanyMailDraft(){
+  const meeting = document.getElementById('meeting')?.value || '';
+  const project = document.getElementById('project')?.value || '';
+  if(!meeting){ alert('Choisis une réunion.'); return; }
+  const companies = selectedCompaniesForMail();
+  const url = `/api/meeting_company_mail_draft?meeting_id=${encodeURIComponent(meeting)}&project=${encodeURIComponent(project)}&companies=${encodeURIComponent(companies.join(','))}`;
+  const res = await fetch(url);
+  const data = await res.json();
+  if(data.error){ alert(data.error); return; }
+  const rec = document.getElementById('mailRecipients');
+  const body = document.getElementById('mailBody');
+  if(rec) rec.value = (data.recipients || []).join('; ');
+  if(body) body.value = data.draft_text || '';
+}
+
+function copyMailDraft(){
+  const rec = document.getElementById('mailRecipients')?.value || '';
+  const body = document.getElementById('mailBody')?.value || '';
+  const txt = `Destinataires:
+${rec}
+
+${body}`;
+  navigator.clipboard.writeText(txt).catch(()=>{});
+}
+
 async function refreshDashboard(){
   const meeting = document.getElementById('meeting')?.value || '';
   const project = document.getElementById('project')?.value || '';
@@ -2750,6 +2833,14 @@ select{{width:100%;padding:12px 12px;border-radius:12px;border:1px solid var(--b
 .meetingLine span{{position:sticky;top:2px;display:inline-block;transform:translateX(6px);background:#0ea5e9;color:#fff;font-size:10px;font-weight:900;padding:2px 6px;border-radius:999px}}
 .small{{font-size:12px;color:var(--muted);font-weight:700}}
 .empty{{color:var(--muted);font-style:italic}}
+.mailModal{{position:fixed;inset:0;background:rgba(0,0,0,.35);display:none;align-items:center;justify-content:center;z-index:10050}}
+.mailPanel{{background:#fff;width:min(900px,94vw);max-height:92vh;overflow:auto;border:1px solid var(--border);border-radius:14px;box-shadow:0 20px 50px rgba(2,6,23,.2);padding:14px}}
+.mailGrid{{display:grid;grid-template-columns:1fr 1fr;gap:10px}}
+.mailField{{display:grid;gap:6px}}
+.mailField label{{margin:0;font-size:12px;color:var(--muted)}}
+.mailField textarea,.mailField select{{width:100%;padding:10px;border-radius:10px;border:1px solid var(--border);font:13px/1.4 system-ui,-apple-system,Segoe UI,Roboto,Arial;}}
+.mailActions{{display:flex;gap:8px;justify-content:flex-end;margin-top:10px;flex-wrap:wrap}}
+
 
 .drawerOverlay{{position:fixed;inset:0;background:rgba(15,23,42,.22);z-index:10040;opacity:0;pointer-events:none;transition:opacity .16s ease}}
 .drawerOverlay.open{{opacity:1;pointer-events:auto}}
@@ -2799,7 +2890,7 @@ body.drawerOpen{{overflow:hidden}}
       </div>
 
       <div style="display:flex;gap:10px;margin-top:14px;flex-wrap:wrap">
-        <button class="btn" type="button" onclick="openCR()">Ouvrir le compte-rendu</button>
+        <button class="btn" type="button" onclick="openCR()">Ouvrir le compte-rendu</button><button class="btn secondary" type="button" onclick="openCompanyMailModal()">Préparer mail entreprises</button>
       </div>
     </div>
 
@@ -2871,6 +2962,29 @@ body.drawerOpen{{overflow:hidden}}
         <div class="drawerMeta">ID: <span id="drawerTaskId">—</span></div>
       </div>
     </aside>
+  </div>
+
+
+  <div class="mailModal" id="mailModal">
+    <div class="mailPanel">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px"><div style="font-weight:1000">Mail entreprises (compte-rendu)</div><button class="btnLite" type="button" onclick="closeCompanyMailModal()">Fermer</button></div>
+      <div class="mailGrid">
+        <div class="mailField">
+          <label><input id="mailAllCompanies" type="checkbox" checked /> Toutes les entreprises (sinon sélection multiple)</label>
+          <select id="mailCompanySelect" multiple size="10"></select>
+        </div>
+        <div class="mailField">
+          <label>Destinataires (emails)</label>
+          <textarea id="mailRecipients" rows="4" placeholder="emails détectés automatiquement"></textarea>
+          <label>Texte mail prêt à copier-coller</label>
+          <textarea id="mailBody" rows="14"></textarea>
+        </div>
+      </div>
+      <div class="mailActions">
+        <button class="btnLite" type="button" onclick="generateCompanyMailDraft()">Générer brouillon</button>
+        <button class="btnLite" type="button" onclick="copyMailDraft()">Copier brouillon</button>
+      </div>
+    </div>
   </div>
 
 <script>{home_script}</script>
@@ -4605,6 +4719,103 @@ def api_meeting_package_email(
             server.send_message(msg)
 
         return {"sent": True, "recipients": recips, "kpis": payload["kpis"]}
+    except MissingDataError as err:
+        return JSONResponse(
+            {"error": str(err), "label": err.label, "path": err.path, "env_var": err.env_var},
+            status_code=503,
+        )
+    except Exception as ex:
+        return JSONResponse({"error": str(ex)}, status_code=500)
+
+
+@app.get("/api/meeting_company_mail_draft", response_class=JSONResponse)
+def api_meeting_company_mail_draft(
+    meeting_id: str = Query(...),
+    project: str = Query(default=""),
+    companies: str = Query(default=""),
+):
+    try:
+        mrow = meeting_row(meeting_id)
+        project = (project or str(mrow.get(M_COL_PROJECT_TITLE, ""))).strip()
+        meet_date = _parse_date_any(mrow.get(M_COL_DATE)) or date.today()
+        today_ref = date.today()
+
+        edf = entries_for_meeting(meeting_id).copy()
+        if project:
+            edf = edf.loc[_series(edf, E_COL_PROJECT_TITLE, "").fillna("").astype(str).str.strip() == project].copy()
+        if edf.empty:
+            return {"meeting_id": meeting_id, "recipients": [], "draft_text": "Aucune donnée de réunion."}
+
+        edf["__company__"] = _series(edf, E_COL_COMPANY_TASK, "").fillna("").astype(str).str.strip().replace("", "Non renseigné")
+        selected = [x.strip() for x in str(companies or "").split(",") if x.strip()]
+        if selected:
+            sel_norm = {_norm_name(x) for x in selected}
+            edf = edf.loc[edf["__company__"].astype(str).apply(lambda v: _norm_name(v) in sel_norm)].copy()
+
+        if edf.empty:
+            return {"meeting_id": meeting_id, "recipients": [], "draft_text": "Aucune donnée pour les entreprises sélectionnées."}
+
+        edf["__is_task__"] = _series(edf, E_COL_IS_TASK, False).apply(_bool_true)
+        edf["__deadline__"] = _series(edf, E_COL_DEADLINE, None).apply(_parse_date_any)
+        edf["__completed__"] = _series(edf, E_COL_COMPLETED, False).apply(_bool_true)
+
+        emails_map = companies_email_by_name()
+        recipients = sorted({mail for c in edf["__company__"].astype(str).tolist() for mail in emails_map.get(_norm_name(c), [])})
+
+        lines = []
+        lines.append(f"Réunion: {meeting_id}")
+        lines.append(f"Projet: {project}")
+        lines.append(f"Date réunion: {meet_date.isoformat()}")
+        lines.append(f"Date de génération: {today_ref.isoformat()}")
+        lines.append("")
+
+        for comp, g in edf.groupby("__company__", dropna=False):
+            tasks = g.loc[g["__is_task__"] == True].copy()
+            memos = g.loc[g["__is_task__"] == False].copy()
+            reminders = tasks.loc[(tasks["__completed__"] == False) & (tasks["__deadline__"].notna()) & (tasks["__deadline__"] < today_ref)].copy()
+            opened = tasks.loc[tasks["__completed__"] == False].copy()
+            closed = tasks.loc[tasks["__completed__"] == True].copy()
+
+            lines.append(f"=== {comp} ===")
+            lines.append(f"- KPI: {len(opened)} ouverte(s) | {len(closed)} clôturée(s) | {len(reminders)} rappel(s) | {len(memos)} mémo(s)")
+
+            if not reminders.empty:
+                lines.append("- Rappels:")
+                for _, r in reminders.head(15).iterrows():
+                    t = str(r.get(E_COL_TITLE, "") or "").strip()
+                    dl = _fmt_date(r.get("__deadline__"))
+                    lines.append(f"  • {t} (échéance: {dl or '—'})")
+
+            if not opened.empty:
+                lines.append("- Tâches ouvertes:")
+                for _, r in opened.head(15).iterrows():
+                    t = str(r.get(E_COL_TITLE, "") or "").strip()
+                    dl = _fmt_date(r.get("__deadline__"))
+                    lines.append(f"  • {t} (échéance: {dl or '—'})")
+
+            if not closed.empty:
+                lines.append("- Tâches clôturées:")
+                for _, r in closed.head(10).iterrows():
+                    t = str(r.get(E_COL_TITLE, "") or "").strip()
+                    dl = _fmt_date(r.get("__deadline__"))
+                    lines.append(f"  • {t} (échéance: {dl or '—'})")
+
+            if not memos.empty:
+                lines.append("- Mémos:")
+                for _, r in memos.head(10).iterrows():
+                    t = str(r.get(E_COL_TITLE, "") or "").strip()
+                    cmt = str(r.get(E_COL_TASK_COMMENT_TEXT, "") or "").strip()
+                    lines.append(f"  • {t}{(' — ' + cmt) if cmt else ''}")
+            lines.append("")
+
+        draft_text = "\n".join(lines).strip()
+        return {
+            "meeting_id": meeting_id,
+            "project": project,
+            "selected_companies": sorted({str(c) for c in edf["__company__"].astype(str).tolist()}),
+            "recipients": recipients,
+            "draft_text": draft_text,
+        }
     except MissingDataError as err:
         return JSONResponse(
             {"error": str(err), "label": err.label, "path": err.path, "env_var": err.env_var},
