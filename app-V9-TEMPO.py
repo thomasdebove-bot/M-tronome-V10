@@ -81,6 +81,10 @@ COMMENTS_PATH = os.getenv(
     "METRONOME_COMMENTS",
     r"\\192.168.10.100\02 - affaires\02.2 - SYNTHESE\ZZ - METRONOME\Comments.csv",
 )
+USERS_PATH = os.getenv(
+    "METRONOME_USERS",
+    r"\\192.168.10.100\02 - affaires\02.2 - SYNTHESE\ZZ - METRONOME\Users.csv",
+)
 
 # -------------------------
 # COLUMN NAMES (METRONOME EXPORTS)
@@ -141,6 +145,7 @@ _cache = {
     "companies": (None, None),
     "projects": (None, None),
     "documents": (None, None),
+    "users": (None, None),
 }
 
 
@@ -215,6 +220,19 @@ def get_documents() -> pd.DataFrame:
         _require_csv(DOCUMENTS_PATH, "Documents", "METRONOME_DOCUMENTS")
         df = _load_csv(DOCUMENTS_PATH)
         _cache["documents"] = (m, df)
+    return df
+
+
+def get_users() -> pd.DataFrame:
+    m = _mtime(USERS_PATH)
+    old_m, df = _cache["users"]
+    if df is None or m != old_m:
+        if not os.path.exists(USERS_PATH):
+            df = pd.DataFrame()
+            _cache["users"] = (m, df)
+            return df
+        df = _load_csv(USERS_PATH)
+        _cache["users"] = (m, df)
     return df
 
 
@@ -693,6 +711,80 @@ def _project_deployed_people_by_company(project_title: str) -> Dict[str, List[st
         if uniq:
             out[_norm_name(comp_name)] = uniq
     return out
+
+def _users_deployed_contacts_by_company(project_title: str) -> Dict[str, List[Dict[str, str]]]:
+    u = get_users().copy()
+    if u.empty:
+        return {}
+
+    cols = list(u.columns)
+    email_cols = [c for c in cols if ("mail" in str(c).lower() or "email" in str(c).lower())]
+    name_cols = [c for c in cols if ("name" in str(c).lower() or "nom" in str(c).lower())]
+    company_cols = [c for c in cols if ("company" in str(c).lower() or "entreprise" in str(c).lower())]
+    project_cols = [c for c in cols if ("project" in str(c).lower() or "projet" in str(c).lower())]
+
+    if project_title and project_cols:
+        pnorm = _norm_name(project_title)
+        def _on_project(row) -> bool:
+            for col in project_cols:
+                raw = str(row.get(col, "") or "").strip()
+                for part in _split_multi_labels(raw):
+                    if _norm_name(part) == pnorm:
+                        return True
+                if raw and pnorm and pnorm in _norm_name(raw):
+                    return True
+            return False
+        u = u.loc[u.apply(_on_project, axis=1)].copy()
+
+    out: Dict[str, List[Dict[str, str]]] = {}
+    if u.empty:
+        return out
+
+    for _, r in u.iterrows():
+        company_vals: List[str] = []
+        for col in company_cols:
+            raw = str(r.get(col, "") or "").strip()
+            if not raw or raw.lower() == "nan":
+                continue
+            parts = _split_multi_labels(raw) or [raw]
+            company_vals.extend([x for x in parts if str(x).strip()])
+        if not company_vals:
+            continue
+
+        person_name = ""
+        for col in name_cols:
+            raw = str(r.get(col, "") or "").strip()
+            if raw and raw.lower() != "nan":
+                person_name = raw
+                break
+
+        emails: List[str] = []
+        for col in email_cols:
+            emails.extend(_extract_emails(str(r.get(col, "") or "")))
+        emails = sorted({e.lower() for e in emails if e})
+        if not emails:
+            continue
+
+        for company in company_vals:
+            key = _norm_name(str(company))
+            out.setdefault(key, [])
+            for em in emails:
+                out[key].append({"name": person_name, "email": em})
+
+    for k, vals in list(out.items()):
+        dedup: Dict[str, Dict[str, str]] = {}
+        for v in vals:
+            em = str(v.get("email", "") or "").strip().lower()
+            if not em:
+                continue
+            nm = str(v.get("name", "") or "").strip()
+            old = dedup.get(em, {"name": "", "email": em})
+            if nm and not old.get("name"):
+                old["name"] = nm
+            dedup[em] = old
+        out[k] = sorted(dedup.values(), key=lambda x: (str(x.get("name", "")).lower(), str(x.get("email", "")).lower()))
+    return out
+
 
 
 # -------------------------
@@ -2938,7 +3030,7 @@ select{{width:100%;padding:12px 12px;border-radius:12px;border:1px solid var(--b
 .mailField label{{margin:0;font-size:12px;color:var(--muted)}}
 .mailField textarea,.mailField select{{width:100%;padding:10px;border-radius:10px;border:1px solid var(--border);font:13px/1.4 system-ui,-apple-system,Segoe UI,Roboto,Arial;}}
 #mailCompanySelect{{height:190px}}
-#mailBody{{min-height:420px}}
+#mailBody{{min-height:520px;font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre;tab-size:2}}
 #mailRecipientDetails{{white-space:pre-wrap;font-size:12px;color:var(--muted);background:var(--soft);border:1px solid var(--border);border-radius:10px;padding:8px;max-height:140px;overflow:auto}}
 .mailActions{{display:flex;gap:8px;justify-content:flex-end;margin-top:10px;flex-wrap:wrap}}
 
@@ -4875,15 +4967,19 @@ def api_meeting_company_mail_draft(
         emails_map = companies_email_by_name()
         contacts_map = _contacts_by_company_name()
         deployed_people = _project_deployed_people_by_company(project)
+        users_contacts_map = _users_deployed_contacts_by_company(project)
 
         recipients_by_company: Dict[str, List[str]] = {}
         recipients_details: Dict[str, List[str]] = {}
+
         for comp in sorted({str(c) for c in all_project_df["__company__"].astype(str).tolist()}):
             key = _norm_name(comp)
             people_norm = {_norm_name(x) for x in deployed_people.get(key, [])}
-            contacts = contacts_map.get(key, [])
-            targeted: List[str] = []
-            for ct in contacts:
+            company_contacts = contacts_map.get(key, [])
+            users_contacts = users_contacts_map.get(key, [])
+
+            matched_company_emails: List[str] = []
+            for ct in company_contacts:
                 nm = str(ct.get("name", "") or "").strip()
                 em = str(ct.get("email", "") or "").strip().lower()
                 if not em:
@@ -4891,69 +4987,121 @@ def api_meeting_company_mail_draft(
                 nm_norm = _norm_name(nm)
                 if people_norm and nm_norm:
                     if nm_norm in people_norm or any((pn and (pn in nm_norm or nm_norm in pn)) for pn in people_norm):
-                        targeted.append(em)
-            base_emails = emails_map.get(key, [])
-            final_emails = sorted({e for e in (targeted if targeted else base_emails) if e})
+                        matched_company_emails.append(em)
+
+            users_emails = sorted({str(x.get("email", "") or "").strip().lower() for x in users_contacts if str(x.get("email", "") or "").strip()})
+            base_emails = sorted({e.lower() for e in emails_map.get(key, []) if e})
+
+            if matched_company_emails:
+                final_emails = sorted(set(matched_company_emails))
+                source = "contacts entreprise appariés aux personnes projet"
+            elif users_emails:
+                final_emails = users_emails
+                source = "USERS (personnes déployées projet)"
+            else:
+                final_emails = base_emails
+                source = "emails entreprise (fallback)"
+
             recipients_by_company[comp] = final_emails
-            details = []
+
+            details: List[str] = []
             if deployed_people.get(key):
                 details.append("personnes projet: " + ", ".join(deployed_people.get(key, [])))
-            if targeted:
-                details.append("contacts appariés: " + ", ".join(sorted({str(c.get("name", "")).strip() or c.get("email", "") for c in contacts if str(c.get("email", "")).strip().lower() in set(targeted)})))
-            if not details:
-                details.append("fallback emails entreprise")
+            if users_contacts:
+                users_names = sorted({str(x.get("name", "") or "").strip() for x in users_contacts if str(x.get("name", "") or "").strip()})
+                if users_names:
+                    details.append("contacts USERS: " + ", ".join(users_names))
+            details.append("source destinataires: " + source)
             recipients_details[comp] = details
 
         recipients = sorted({mail for vals in recipients_by_company.values() for mail in vals})
 
-        def _line_task(r) -> str:
-            t = str(r.get(E_COL_TITLE, "") or "").strip() or "(sans titre)"
-            area = str(r.get("__area_list__", "") or "").strip() or "Général"
-            owner = str(r.get(E_COL_OWNER, "") or "").strip() or "Non attribué"
-            dl = _fmt_date(r.get("__deadline__")) or "—"
-            cr = _fmt_date(r.get("__created__")) or "—"
-            st = str(r.get(E_COL_STATUS, "") or "").strip() or "—"
-            cmt = str(r.get(E_COL_TASK_COMMENT_TEXT, "") or "").strip()
-            base = f"  • [{area}] {t} | propriétaire: {owner} | créé: {cr} | échéance: {dl} | statut: {st}"
-            return base + (f" | commentaire: {cmt}" if cmt else "")
+        def _fmt_short(d: Optional[date]) -> str:
+            return d.strftime("%d/%m/%y") if isinstance(d, date) else "—"
+
+        def _line_task_row(r, company_name: str) -> str:
+            title = str(r.get(E_COL_TITLE, "") or "").strip() or "(sans titre)"
+            owner = str(r.get(E_COL_OWNER, "") or "").strip() or "—"
+            created = _fmt_short(r.get("__created__"))
+            deadline = _fmt_short(r.get("__deadline__"))
+            status = str(r.get(E_COL_STATUS, "") or "").strip() or "—"
+            comment = str(r.get(E_COL_TASK_COMMENT_TEXT, "") or "").strip()
+            line = f"- {title} | Ecrit le: {created} | Pour le: {deadline} | Fait le: {status} | Concerne: {company_name} | Propriétaire: {owner}"
+            if comment and comment.lower() != "nan":
+                line += f" | Commentaire: {comment}"
+            return line
 
         lines = [
-            f"Réunion: {meeting_id}",
-            f"Projet: {project}",
-            f"Date réunion: {meet_date.isoformat()}",
-            f"Date de génération: {today_ref.isoformat()}",
+            "Bonjour,",
             "",
-            "NB: ce brouillon liste tous les sujets OUVERTS du projet (pas seulement la réunion).",
+            f"Veuillez trouver ci-après les sujets listés en réunion du {_fmt_short(meet_date)}.",
             "",
+            "Rappels en cours :",
         ]
+
+        for comp in sorted(recipients_by_company.keys()):
+            g = all_project_df.loc[(all_project_df["__company__"].astype(str) == comp) & (all_project_df["__is_task__"] == True) & (all_project_df["__completed__"] == False)].copy()
+            rem = g.loc[g["__deadline__"].notna() & (g["__deadline__"] < today_ref)].copy()
+            lines.append(f"- {comp} : {len(rem)} rappel(s)")
+
+        lines.extend([
+            "",
+            "=" * 72,
+            f"Réunion: {meeting_id} | Projet: {project} | Généré le: {_fmt_short(today_ref)}",
+            "NB: ce brouillon liste tous les sujets OUVERTS du projet (pas seulement la réunion).",
+            "=" * 72,
+            "",
+        ])
 
         for comp, g_comp in all_project_df.groupby("__company__", dropna=False):
             comp = str(comp)
-            lines.append(f"=== ENTREPRISE: {comp} ===")
+            lines.append(f"ENTREPRISE : {comp}")
             lines.append(f"Destinataires détectés: {', '.join(recipients_by_company.get(comp, [])) or 'aucun'}")
             for info in recipients_details.get(comp, []):
-                lines.append(f"  - {info}")
+                lines.append(f"  • {info}")
+            lines.append("")
+
             for perimeter, g_per in g_comp.groupby("__area_list__", dropna=False):
                 tasks = g_per.loc[g_per["__is_task__"] == True].copy()
+                memos = g_per.loc[g_per["__is_task__"] == False].copy()
                 open_all = tasks.loc[tasks["__completed__"] == False].copy()
                 reminders = open_all.loc[(open_all["__deadline__"].notna()) & (open_all["__deadline__"] < today_ref)].copy()
-                new_open = open_all.loc[open_all["__created__"].notna() & (open_all["__created__"] >= meet_date)].copy()
-
-                if open_all.empty:
+                if open_all.empty and memos.empty:
                     continue
 
-                lines.append(f"-- Périmètre: {perimeter if str(perimeter).strip() else 'Général'}")
-                lines.append(f"   KPI ouverts projet: ouverts={len(open_all)} | nouveaux_depuis_reunion={len(new_open)} | rappels={len(reminders)}")
+                lines.append(f"Périmètre : {perimeter if str(perimeter).strip() else 'Généralité'}")
+                lines.append(f"KPI -> ouverts={len(open_all)} | rappels={len(reminders)} | mémos={len(memos)}")
+                lines.append("Sujet | Ecrit le | Pour le | Fait le | Concerne")
+                lines.append("-" * 72)
 
                 if not reminders.empty:
-                    lines.append("   Rappels (ouverts):")
+                    lines.append("Rappels (ouverts):")
                     for _, r in reminders.iterrows():
-                        lines.append(_line_task(r))
+                        lines.append(_line_task_row(r, comp))
 
-                lines.append("   Tous les ouverts:")
-                for _, r in open_all.iterrows():
-                    lines.append(_line_task(r))
+                if not open_all.empty:
+                    lines.append("Tous les ouverts:")
+                    for _, r in open_all.iterrows():
+                        lines.append(_line_task_row(r, comp))
+
+                if not memos.empty:
+                    lines.append("Mémos:")
+                    for _, r in memos.iterrows():
+                        memo_title = str(r.get(E_COL_TITLE, "") or "").strip() or "(sans titre)"
+                        memo_created = _fmt_short(r.get("__created__"))
+                        lines.append(f"- {memo_title} | Ecrit le: {memo_created} | Pour le: / | Fait le: / | Concerne: {comp}")
+
                 lines.append("")
+
+            lines.append("-" * 72)
+            lines.append("")
+
+        lines.extend([
+            "Téléchargez gratuitement l'application de gestion de projet METRONOME :",
+            "app.atelier-tempo.fr",
+            "",
+            "Vous en souhaitant bonne réception,",
+        ])
 
         draft_text = "\n".join(lines).strip()
         return {
