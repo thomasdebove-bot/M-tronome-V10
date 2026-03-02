@@ -3008,7 +3008,9 @@ async function generateCompanyMailDraft(){
   if(!meeting){ alert('Choisis une réunion.'); return; }
   const companies = selectedCompaniesForMail();
   const allCompanies = (document.getElementById('mailAllCompanies')?.checked) ? '1' : '0';
-  const url = `/api/meeting_company_mail_draft?meeting_id=${encodeURIComponent(meeting)}&project=${encodeURIComponent(project)}&selected_companies=${encodeURIComponent(companies.join(','))}&all_companies=${allCompanies}`;
+  const pStart = document.getElementById('mailPeriodStart')?.value || '';
+  const pEnd = document.getElementById('mailPeriodEnd')?.value || '';
+  const url = `/api/meeting_company_mail_draft?meeting_id=${encodeURIComponent(meeting)}&project=${encodeURIComponent(project)}&selected_companies=${encodeURIComponent(companies.join(','))}&all_companies=${allCompanies}&period_start=${encodeURIComponent(pStart)}&period_end=${encodeURIComponent(pEnd)}`;
   const res = await fetch(url);
   const data = await res.json();
   if(data.error){ alert(data.error); return; }
@@ -3060,8 +3062,12 @@ async function refreshDashboard(){
 window.addEventListener('DOMContentLoaded', () => {
   const allChk = document.getElementById('mailAllCompanies');
   const sel = document.getElementById('mailCompanySelect');
+  const pStart = document.getElementById('mailPeriodStart');
+  const pEnd = document.getElementById('mailPeriodEnd');
   if(allChk) allChk.addEventListener('change', () => { toggleMailCompanyMode(); generateCompanyMailDraft(); });
   if(sel) sel.addEventListener('change', generateCompanyMailDraft);
+  if(pStart) pStart.addEventListener('change', generateCompanyMailDraft);
+  if(pEnd) pEnd.addEventListener('change', generateCompanyMailDraft);
   refreshDashboard();
 });
 """
@@ -3187,6 +3193,9 @@ select{{width:100%;padding:12px 12px;border-radius:12px;border:1px solid var(--b
 .mailGrid{{display:grid;grid-template-columns:minmax(260px,30%) minmax(700px,70%);gap:14px}}
 .mailField{{display:grid;gap:6px}}
 .mailField label{{margin:0;font-size:12px;color:var(--muted)}}
+.mailPeriodRow{{display:flex;gap:8px;align-items:center;flex-wrap:wrap}}
+.mailPeriodRow label{{display:grid;gap:4px;font-size:12px;color:var(--muted)}}
+.mailPeriodRow input{{padding:7px 9px;border:1px solid var(--border);border-radius:8px;font:12px/1.3 system-ui,-apple-system,Segoe UI,Roboto,Arial;}}
 .mailField textarea,.mailField select{{width:100%;padding:10px;border-radius:10px;border:1px solid var(--border);font:13px/1.4 system-ui,-apple-system,Segoe UI,Roboto,Arial;}}
 #mailCompanySelect{{height:190px}}
 #mailBody{{min-height:520px;font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre;tab-size:2}}
@@ -3322,6 +3331,7 @@ body.drawerOpen{{overflow:hidden}}
       <div class="mailGrid">
         <div class="mailField">
           <label><input id="mailAllCompanies" type="checkbox" checked /> Toutes les entreprises (sinon sélection multiple)</label>
+          <div class="mailPeriodRow"><label>Du <input id="mailPeriodStart" type="date" /></label><label>Au <input id="mailPeriodEnd" type="date" /></label></div>
           <select id="mailCompanySelect" multiple></select>
         </div>
         <div class="mailField">
@@ -5084,11 +5094,17 @@ def api_meeting_company_mail_draft(
     companies: str = Query(default=""),
     selected_companies: str = Query(default=""),
     all_companies: bool = Query(default=True),
+    period_start: str = Query(default=""),
+    period_end: str = Query(default=""),
 ):
     try:
         mrow = meeting_row(meeting_id)
         project = (project or str(mrow.get(M_COL_PROJECT_TITLE, ""))).strip()
         meeting_date = _parse_date_any(mrow.get(M_COL_DATE)) or date.today()
+        p_start = _parse_date_any(period_start) if str(period_start or "").strip() else None
+        p_end = _parse_date_any(period_end) if str(period_end or "").strip() else None
+        if p_start and p_end and p_start > p_end:
+            p_start, p_end = p_end, p_start
 
         meeting_df = entries_for_meeting(meeting_id).copy()
         if project:
@@ -5182,6 +5198,21 @@ def api_meeting_company_mail_draft(
             created_date = r.get("__created__")
             done_date = r.get("__done_date__")
             rem_lvl = 0
+
+            if p_start or p_end:
+                dates_for_match = [d for d in [created_date, due_date, done_date] if isinstance(d, date)]
+                if not dates_for_match:
+                    continue
+                in_period = False
+                for dd in dates_for_match:
+                    if p_start and dd < p_start:
+                        continue
+                    if p_end and dd > p_end:
+                        continue
+                    in_period = True
+                    break
+                if not in_period:
+                    continue
 
             if is_task and not is_completed and isinstance(due_date, date) and due_date < meeting_date:
                 itype = "reminder"
