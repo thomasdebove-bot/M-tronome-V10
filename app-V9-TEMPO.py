@@ -2126,6 +2126,7 @@ function openTimelineDrawer(task){
   const status = drawerValue(task.status);
   const owner = drawerValue(task.owner);
   const company = drawerValue(task.company);
+  const companyLogo = String(task.company_logo || '').trim();
   const startTxt = drawerValue(task.start_txt);
   const endTxt = drawerValue(task.end_txt);
   const comment = drawerValue(task.comment);
@@ -2141,6 +2142,16 @@ function openTimelineDrawer(task){
   setText('drawerTaskTiming', `${startTxt} → ${endTxt}`);
   setText('drawerTaskOwner', owner);
   setText('drawerTaskCompany', company);
+  const logoEl = document.getElementById('drawerTaskCompanyLogo');
+  if(logoEl){
+    if(companyLogo && /^https?:\/\//i.test(companyLogo)){
+      logoEl.src = companyLogo;
+      logoEl.style.display = 'inline-block';
+    } else {
+      logoEl.removeAttribute('src');
+      logoEl.style.display = 'none';
+    }
+  }
 
   const noteBlock = document.getElementById('drawerNoteBlock');
   const noteEl = document.getElementById('drawerTaskComment');
@@ -2189,6 +2200,7 @@ function bindTimelineBarClicks(){
         status: bar.dataset.taskStatus,
         owner: bar.dataset.taskOwner,
         company: bar.dataset.taskCompany,
+        company_logo: bar.dataset.taskCompanyLogo,
         comment: bar.dataset.taskComment,
         end: bar.dataset.taskEndIso,
         completed: bar.dataset.taskCompleted,
@@ -2489,7 +2501,7 @@ function renderTimeline(data){
             ${detail}
           </div>
           <div class="gTrack" style="width:${totalWidth}px">
-            <div class="gBar ${cls} ${meetingFx}" style="left:${left}px;width:${width}px" data-tip="${tip.replaceAll('"','&quot;')}" data-task-id="${escHtml(it.task_id)}" data-task-title="${escHtml(taskTitle)}" data-task-area="${escHtml(it.area || '')}" data-task-package="${escHtml(it.package || '')}" data-task-start="${escHtml(it.start_txt || '')}" data-task-end="${escHtml(it.end_txt || '')}" data-task-status="${escHtml(it.status || '')}" data-task-owner="${escHtml(it.owner || '')}" data-task-company="${escHtml(it.company || '')}" data-task-comment="${escHtml(it.comment || '')}" data-task-end-iso="${escHtml(it.end || '')}" data-task-completed="${String(!!it.completed)}">
+            <div class="gBar ${cls} ${meetingFx}" style="left:${left}px;width:${width}px" data-tip="${tip.replaceAll('"','&quot;')}" data-task-id="${escHtml(it.task_id)}" data-task-title="${escHtml(taskTitle)}" data-task-area="${escHtml(it.area || '')}" data-task-package="${escHtml(it.package || '')}" data-task-start="${escHtml(it.start_txt || '')}" data-task-end="${escHtml(it.end_txt || '')}" data-task-status="${escHtml(it.status || '')}" data-task-owner="${escHtml(it.owner || '')}" data-task-company="${escHtml(it.company || '')}" data-task-company-logo="${escHtml(it.company_logo || '')}" data-task-comment="${escHtml(it.comment || '')}" data-task-end-iso="${escHtml(it.end || '')}" data-task-completed="${String(!!it.completed)}">
               <span class="barTitle">${taskTitle}</span>
             </div>
           </div>
@@ -2682,19 +2694,20 @@ select{{width:100%;padding:12px 12px;border-radius:12px;border:1px solid var(--b
 
 .drawerOverlay{{position:fixed;inset:0;background:rgba(15,23,42,.22);z-index:10040;opacity:0;pointer-events:none;transition:opacity .16s ease}}
 .drawerOverlay.open{{opacity:1;pointer-events:auto}}
-.taskDrawer{{position:fixed;top:0;right:0;height:100vh;width:min(520px,95vw);background:#fff;border-left:1px solid var(--border);box-shadow:-8px 0 28px rgba(2,6,23,.2);transform:translateX(100%);transition:transform .18s ease;display:flex;flex-direction:column}}
+.taskDrawer{{position:fixed;top:0;right:0;height:100vh;width:min(440px,92vw);background:#fff;border-left:1px solid var(--border);box-shadow:-8px 0 28px rgba(2,6,23,.16);transform:translateX(100%);transition:transform .18s ease;display:flex;flex-direction:column}}
 .drawerOverlay.open .taskDrawer{{transform:translateX(0)}}
 .drawerHead{{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:14px 16px;border-bottom:1px solid var(--border);font-weight:1000}}
 .drawerClose{{border:1px solid var(--border);background:#fff;border-radius:10px;width:32px;height:32px;font-size:18px;font-weight:900;cursor:pointer}}
-.drawerBody{{padding:18px 20px 16px;overflow:auto;display:grid;gap:14px;background:#fff}}
-.drawerTitle{{font-size:34px;line-height:1.16;font-weight:1000;margin:0;word-break:break-word;letter-spacing:-.01em}}
-.drawerSubline{{font-size:16px;color:#475569;font-weight:700}}
-.drawerTimeSignal{{font-size:16px;font-weight:900;background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:10px 12px;display:inline-flex;max-width:max-content}}
-.drawerInfo{{display:grid;gap:8px}}
+.drawerBody{{padding:16px 18px 14px;overflow:auto;display:grid;gap:12px;background:#fff}}
+.drawerTitle{{font-size:24px;line-height:1.2;font-weight:1000;margin:0;word-break:break-word;letter-spacing:-.01em}}
+.drawerSubline{{font-size:14px;color:#64748b;font-weight:700}}
+.drawerTimeSignal{{font-size:14px;font-weight:900;background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:8px 10px;display:inline-flex;max-width:max-content}}
+.drawerInfo{{display:grid;gap:6px}}
 .drawerLine{{display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap}}
-.drawerLine .k{{font-size:13px;color:#64748b;font-weight:900;min-width:98px;text-transform:none;letter-spacing:.01em}}
-.drawerLine .v{{font-size:18px;font-weight:700;color:#0f172a;word-break:break-word;white-space:pre-wrap;flex:1}}
-.drawerMeta{{font-size:10px;color:#94a3b8;font-weight:600;text-align:right}}
+.drawerLine .k{{font-size:12px;color:#64748b;font-weight:900;min-width:86px;text-transform:none;letter-spacing:.01em}}
+.drawerLine .v{{font-size:15px;font-weight:700;color:#0f172a;word-break:break-word;white-space:pre-wrap;flex:1}}
+.drawerMeta{{font-size:9px;color:#94a3b8;font-weight:600;text-align:right}}
+.drawerCoLogo{{width:24px;height:24px;border-radius:999px;object-fit:cover;border:1px solid #e2e8f0;display:none}}
 body.drawerOpen{{overflow:hidden}}
 
 </style>
@@ -2791,7 +2804,7 @@ body.drawerOpen{{overflow:hidden}}
         <div class="drawerInfo">
           <div class="drawerLine"><div class="k">Timing</div><div id="drawerTaskTiming" class="v">—</div></div>
           <div class="drawerLine"><div class="k">Responsable</div><div id="drawerTaskOwner" class="v">—</div></div>
-          <div class="drawerLine"><div class="k">Entreprise</div><div id="drawerTaskCompany" class="v">—</div></div>
+          <div class="drawerLine"><div class="k">Entreprise</div><img id="drawerTaskCompanyLogo" class="drawerCoLogo" alt="logo entreprise" /><div id="drawerTaskCompany" class="v">—</div></div>
           <div id="drawerNoteBlock" class="drawerLine"><div class="k">Notes</div><div id="drawerTaskComment" class="v"></div></div>
         </div>
 
@@ -4336,6 +4349,7 @@ def api_home_meeting_dashboard(
                     "perimeter": area_label,
                     "package_color": _timeline_package_color(package_label),
                     "company": str(r.get("__company__", "Non renseigné")),
+                    "company_logo": str(company_logo_map.get(_norm_name(str(r.get("__company__", "") or "")), "") or "").strip(),
                     "owner": str(r.get(E_COL_OWNER, "") or "").strip() or "Non attribué",
                     "task_id": str(r.get(E_COL_ID, "") or "").strip(),
                     "comment": str(r.get(E_COL_TASK_COMMENT_TEXT, "") or "").strip(),
