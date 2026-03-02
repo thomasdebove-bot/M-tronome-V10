@@ -902,7 +902,7 @@ def build_company_email_html(
     html_parts: List[str] = []
     html_parts.append('<html><body style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#111;line-height:1.4;">')
     html_parts.append('<p>Bonjour,</p>')
-    html_parts.append(f"<p>Veuillez trouver ci-après la liste des sujets déployés à la date du {escape(ref_txt)} sur l'application METRONOME.</p>")
+    html_parts.append(f"<p>Veuillez trouver ci-après la liste des sujets ouverts déployés à la date du {escape(ref_txt)} (aujourd'hui) sur l'application METRONOME.</p>")
     html_parts.append('<p>&nbsp;</p>')
 
     rappels_lines = [f"{co} : {cnt} rappel(s)" for co, cnt in sorted(reminders_by_company.items(), key=lambda kv: _norm_name(kv[0])) if int(cnt) >= 1]
@@ -968,7 +968,7 @@ def build_company_email_html(
     html_parts.append(
         "<p><b>Téléchargez gratuitement l'application de gestion de projet METRONOME.</b><br/>"
         "Celle-ci vous permettra de retrouver l'intégralité des réunions de synthèse, comptes rendu, planning et suivi des tâches depuis votre smartphone ou votre ordinateur.<br/>"
-        f'<a href="{escape(footer_url)}" target="_blank" rel="noopener">{escape(footer_label)}</a></p>'
+        f'Pour un suivi optimal, nous vous invitons à mettre à jour ou commenter vos tâches sur <a href="{escape(footer_url)}" target="_blank" rel="noopener">{escape(footer_label)}</a></p>'
     )
     html_parts.append('<p>Vous en souhaitant bonne réception,</p>')
     html_parts.append('</body></html>')
@@ -3026,7 +3026,9 @@ async function generateCompanyMailDraft(){
   const pEnd = document.getElementById('mailPeriodEnd')?.value || '';
   const incTasks = document.getElementById('mailIncludeTasks')?.checked ? '1' : '0';
   const incMemos = document.getElementById('mailIncludeMemos')?.checked ? '1' : '0';
-  const url = `/api/meeting_company_mail_draft?meeting_id=${encodeURIComponent(meeting)}&project=${encodeURIComponent(project)}&selected_companies=${encodeURIComponent(companies.join(','))}&all_companies=${allCompanies}&period_start=${encodeURIComponent(pStart)}&period_end=${encodeURIComponent(pEnd)}&include_tasks=${incTasks}&include_memos=${incMemos}`;
+  const incRem = document.getElementById('mailIncludeReminders')?.checked ? '1' : '0';
+  const incClosed = document.getElementById('mailIncludeClosed')?.checked ? '1' : '0';
+  const url = `/api/meeting_company_mail_draft?meeting_id=${encodeURIComponent(meeting)}&project=${encodeURIComponent(project)}&selected_companies=${encodeURIComponent(companies.join(','))}&all_companies=${allCompanies}&period_start=${encodeURIComponent(pStart)}&period_end=${encodeURIComponent(pEnd)}&include_tasks=${incTasks}&include_memos=${incMemos}&include_reminders=${incRem}&include_closed=${incClosed}`;
   const res = await fetch(url);
   const data = await res.json();
   if(data.error){ alert(data.error); return; }
@@ -3082,12 +3084,16 @@ window.addEventListener('DOMContentLoaded', () => {
   const pEnd = document.getElementById('mailPeriodEnd');
   const incTasks = document.getElementById('mailIncludeTasks');
   const incMemos = document.getElementById('mailIncludeMemos');
+  const incRem = document.getElementById('mailIncludeReminders');
+  const incClosed = document.getElementById('mailIncludeClosed');
   if(allChk) allChk.addEventListener('change', () => { toggleMailCompanyMode(); generateCompanyMailDraft(); });
   if(sel) sel.addEventListener('change', generateCompanyMailDraft);
   if(pStart) pStart.addEventListener('change', generateCompanyMailDraft);
   if(pEnd) pEnd.addEventListener('change', generateCompanyMailDraft);
   if(incTasks) incTasks.addEventListener('change', generateCompanyMailDraft);
   if(incMemos) incMemos.addEventListener('change', generateCompanyMailDraft);
+  if(incRem) incRem.addEventListener('change', generateCompanyMailDraft);
+  if(incClosed) incClosed.addEventListener('change', generateCompanyMailDraft);
   refreshDashboard();
 });
 """
@@ -3354,7 +3360,7 @@ body.drawerOpen{{overflow:hidden}}
         <div class="mailField">
           <label><input id="mailAllCompanies" type="checkbox" checked /> Toutes les entreprises (sinon sélection multiple)</label>
           <div class="mailPeriodRow"><label>Du <input id="mailPeriodStart" type="date" /></label><label>Au <input id="mailPeriodEnd" type="date" /></label></div>
-          <div class="mailTypeRow"><label><input id="mailIncludeTasks" type="checkbox" checked /> Tâches</label><label><input id="mailIncludeMemos" type="checkbox" checked /> Mémos</label></div>
+          <div class="mailTypeRow"><label><input id="mailIncludeTasks" type="checkbox" checked /> Tâches</label><label><input id="mailIncludeMemos" type="checkbox" checked /> Mémos</label><label><input id="mailIncludeReminders" type="checkbox" checked /> Rappels</label><label><input id="mailIncludeClosed" type="checkbox" checked /> Tâches clôturées</label></div>
           <select id="mailCompanySelect" multiple></select>
         </div>
         <div class="mailField">
@@ -5121,6 +5127,8 @@ def api_meeting_company_mail_draft(
     period_end: str = Query(default=""),
     include_tasks: bool = Query(default=True),
     include_memos: bool = Query(default=True),
+    include_reminders: bool = Query(default=True),
+    include_closed: bool = Query(default=True),
 ):
     try:
         mrow = meeting_row(meeting_id)
@@ -5224,8 +5232,6 @@ def api_meeting_company_mail_draft(
             done_date = r.get("__done_date__")
             rem_lvl = 0
 
-            if is_task and not include_tasks:
-                continue
             if (not is_task) and not include_memos:
                 continue
 
@@ -5257,6 +5263,14 @@ def api_meeting_company_mail_draft(
                 else:
                     if isinstance(created_date, date) and created_date > meeting_date:
                         continue
+
+            is_reminder = bool(is_task and (not is_completed) and isinstance(due_date, date) and due_date < meeting_date)
+            if is_task and is_completed and not include_closed:
+                continue
+            if is_reminder and not include_reminders:
+                continue
+            if is_task and (not is_completed) and (not is_reminder) and not include_tasks:
+                continue
 
             if is_task and not is_completed and isinstance(due_date, date) and due_date < meeting_date:
                 itype = "reminder"
@@ -5292,7 +5306,7 @@ def api_meeting_company_mail_draft(
             app_url="https://app.atelier-tempo.fr",
         )
         text_fallback = (
-            f"Bonjour,\n\nVeuillez trouver ci-après la liste des sujets déployés à la date du {_fmt_mail_date(date.today())} sur l'application METRONOME.\n"
+            f"Bonjour,\n\nVeuillez trouver ci-après la liste des sujets ouverts déployés à la date du {_fmt_mail_date(date.today())} (aujourd'hui) sur l'application METRONOME.\n"
             "(Version texte. Utiliser le HTML pour un rendu complet.)"
         )
         return {
