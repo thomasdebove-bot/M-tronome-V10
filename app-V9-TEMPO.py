@@ -896,8 +896,7 @@ def build_company_email_html(
         area = _clean_area_name(str(it.get("area") or "Généralité"))
         area_map.setdefault(area, []).append(it)
         if str(it.get("type") or "") == "reminder":
-            lvl = int(it.get("reminder_level") or 1)
-            for co in (it.get("concerne") or []):
+            for co in (it.get("target_companies") or it.get("concerne") or []):
                 name = str(co or "").strip()
                 if not name:
                     continue
@@ -5305,6 +5304,11 @@ def api_meeting_company_mail_draft(
             if not companies_vals:
                 continue
 
+            lot_vals = _split_multi_labels(str(r.get(E_COL_PACKAGES, "") or "").strip())
+            lot_vals = [x for x in lot_vals if str(x).strip()]
+            if not lot_vals:
+                lot_vals = ["Sans lot"]
+
             items_all.append({
                 "type": itype,
                 "subject": str(r.get(E_COL_TITLE, "") or "").strip() or "(sans titre)",
@@ -5312,7 +5316,8 @@ def api_meeting_company_mail_draft(
                 "due_date": due_date,
                 "done_date": done_date,
                 "done_label": done_label,
-                "concerne": companies_vals,
+                "concerne": lot_vals,
+                "target_companies": companies_vals,
                 "area": _clean_area_name(str(r.get("__area_list__", "") or "").strip() or "Généralité"),
                 "reminder_level": rem_lvl,
             })
