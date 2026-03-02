@@ -2238,29 +2238,32 @@ function renderTimeline(data){
   function renderRowsForItems(items){
     return items.map(it => {
       const left = Math.max(0, (Number(it.offset_days || 0) + padDays) * pxPerDay);
-      const width = Math.max(16, Number(it.duration_days || 1) * pxPerDay);
-      const perimeter = it.perimeter || it.area || 'Périmètre';
+      const width = Math.max(18, Number(it.duration_days || 1) * pxPerDay);
       const rawTitle = (it.title || '').trim();
-      if(!rawTitle){ console.error('METRONOME timeline: missing title for task', it); }
+      if(!rawTitle){ console.warn('METRONOME timeline: missing title for task', it); }
       const taskTitle = rawTitle || 'Tâche sans titre';
       const tip = taskTooltip({...it, title: taskTitle});
       const cls = it.package_color || 'pkg-default';
-      const warn = it.status === 'rappel' ? '<span class="warnBlink right">⚠</span>' : '';
       const dState = timelineDisplayState(it);
       const meetingFx = it.meeting_linked ? 'meetingLinked' : '';
       const end = new Date((it.end || '') + 'T00:00:00');
       const today2 = new Date(); today2.setHours(0,0,0,0);
-      const leftDays = isNaN(end) ? 'n/a' : Math.ceil((end - today2)/86400000) + 'j';
-      const detail = compact ? '' : `<div class="gMeta">${it.owner || 'Non attribué'} • ${taskTitle} • fin ${it.end_txt || ''} • ${leftDays}</div>`;
+      const diff = isNaN(end) ? null : Math.ceil((end - today2)/86400000);
+      const isLate = dState === 'late';
+      const statusIcon = isLate ? '<span class="sevIcon">⚠</span>' : '';
+      const detail = compact
+        ? ''
+        : `<div class="gMeta"><div>Responsable : ${it.owner || 'Non attribué'}</div><div>Échéance : ${it.end_txt || '-'}</div><div>${isLate ? 'Retard' : 'Restant'} : ${diff===null?'n/a':Math.abs(diff)+'j'}</div></div>`;
       return `
         <div class="gRow ${dState}">
+          <div class="gItemCol">
+            <div class="gTitleLine">${statusIcon}<span class="gTitle" title="${taskTitle.replaceAll('"','&quot;')}">${taskTitle}</span></div>
+            ${detail}
+          </div>
           <div class="gTrack" style="width:${totalWidth}px">
             <div class="gBar ${cls} ${meetingFx}" style="left:${left}px;width:${width}px" data-tip="${tip.replaceAll('"','&quot;')}">
-              <span class="lotBadge">${(it.package || 'LOT').slice(0,8)}</span>
               <span class="barTitle">${taskTitle}</span>
-              ${warn}
             </div>
-            ${detail}
           </div>
         </div>`;
     }).join('');
@@ -2396,17 +2399,20 @@ select{{width:100%;padding:12px 12px;border-radius:12px;border:1px solid var(--b
 .gTick span{{padding:0 6px;text-overflow:ellipsis;overflow:hidden}}
 .gBody{{min-width:max-content;position:relative}}
 .todayLine{{position:absolute;top:0;bottom:0;width:2px;background:#dc2626;opacity:.9;z-index:1}}
-.gRow{{min-width:max-content}}
-.gTrack{{position:relative;height:34px;border-bottom:1px solid #f6f8fb;background:repeating-linear-gradient(to right,#fff,#fff 179px,#fbfdff 179px,#fbfdff 180px)}}
+.gRow{{min-width:max-content;display:grid;grid-template-columns:320px 1fr;align-items:center}}
+.gItemCol{{position:sticky;left:0;z-index:4;background:#fff;border-right:1px solid #eef2f7;padding:6px 10px;height:100%}}
+.gTitleLine{{display:flex;align-items:center;gap:6px;min-width:0}}
+.gTitle{{font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block}}
+.sevIcon{{font-size:13px;line-height:1;color:#dc2626}}
+.gTrack{{position:relative;height:34px;border-bottom:1px solid #f8fafc;background:repeating-linear-gradient(to right,#fff,#fff 239px,#fcfdff 239px,#fcfdff 240px)}}
 .gSection:nth-child(even) .gRow .gTrack{{border-bottom-color:transparent}}
 .gSection{{margin-bottom:6px}}
 .gSectionHead{{display:flex;align-items:center;gap:8px;width:100%;text-align:left;border:0;background:#f8fafc;border-bottom:1px solid #e2e8f0;padding:7px 10px;font-weight:900;position:sticky;left:0;z-index:2}}
 .zoneSignal{{margin-left:auto;font-size:12px;font-weight:900}}
-.gBar{{position:absolute;min-height:28px;height:28px;top:2px;border-radius:6px;padding:2px 8px;font-size:12px;font-weight:900;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;border:1px solid rgba(15,23,42,.28);color:#0b1220;display:flex;align-items:center;gap:6px;box-shadow:0 2px 8px rgba(15,23,42,.10);transform-origin:center;transition:transform .15s ease, box-shadow .15s ease}}
-.gBar:hover{{transform:translateY(-1px);box-shadow:0 5px 14px rgba(15,23,42,.15)}}
-.lotBadge{{display:inline-flex;align-items:center;justify-content:center;font-size:10px;padding:1px 6px;border-radius:999px;background:rgba(255,255,255,.7);border:1px solid rgba(15,23,42,.18)}}
-.barTitle{{display:inline-block;max-width:calc(100% - 52px);overflow:hidden;text-overflow:ellipsis}}
-.meetingLinked{{transform:scale(1.03);box-shadow:0 0 0 2px rgba(14,165,233,.25),0 4px 12px rgba(14,165,233,.25)}}
+.gBar{{position:absolute;min-height:26px;height:26px;top:4px;border-radius:6px;padding:2px 8px;font-size:12px;font-weight:700;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;border:1px solid rgba(15,23,42,.28);color:#0b1220;display:flex;align-items:center;box-shadow:0 1px 4px rgba(15,23,42,.08);transform-origin:center;transition:transform .15s ease, box-shadow .15s ease}}
+.gBar:hover{{transform:translateY(-1px);box-shadow:0 4px 10px rgba(15,23,42,.12)}}
+.barTitle{{display:inline-block;max-width:100%;overflow:hidden;text-overflow:ellipsis}}
+.meetingLinked{{transform:scale(1.03);box-shadow:0 0 0 2px rgba(14,165,233,.25),0 3px 8px rgba(14,165,233,.20)}}
 .warnBlink{{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;border-radius:999px;background:#ef4444;color:#fff;font-size:10px;font-weight:1000;animation:blinkWarn 1s steps(2,start) infinite}}
 .warnBlink.right{{margin-left:auto}}
 .tlTooltip{{position:fixed;z-index:99999;max-width:320px;white-space:pre-line;background:#0f172a;color:#fff;padding:8px 10px;border-radius:8px;font-size:12px;line-height:1.35;box-shadow:0 10px 24px rgba(2,6,23,.25);opacity:0;transform:translateY(2px);pointer-events:none;transition:opacity .12s ease, transform .12s ease}}
@@ -2423,7 +2429,7 @@ select{{width:100%;padding:12px 12px;border-radius:12px;border:1px solid var(--b
 .gRow.late .gBar:hover{{transform:translateY(-1px);box-shadow:0 8px 16px rgba(220,38,38,.2)}}
 .gRow.closed .gBar{{opacity:.3}}
 .gRow.closed .barTitle{{text-decoration:line-through}}
-.gMeta{{font-size:11px;color:#64748b;padding:1px 6px 4px 10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
+.gMeta{{font-size:12px;color:#94a3b8;padding-top:2px;line-height:1.25}}
 .meetingBg{{position:absolute;top:0;bottom:0;width:16px;background:rgba(14,165,233,.02);z-index:2}}
 .meetingLine{{position:absolute;top:0;bottom:0;width:4px;background:#0ea5e9;z-index:3;box-shadow:0 0 0 1px rgba(14,165,233,.15)}}
 .meetingLine span{{position:sticky;top:2px;display:inline-block;transform:translateX(6px);background:#0ea5e9;color:#fff;font-size:10px;font-weight:900;padding:2px 6px;border-radius:999px}}
