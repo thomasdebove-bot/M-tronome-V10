@@ -4327,7 +4327,8 @@ def api_home_meeting_dashboard(
     try:
         mrow = meeting_row(meeting_id)
         project = (project or str(mrow.get(M_COL_PROJECT_TITLE, ""))).strip()
-        ref_date = _parse_date_any(mrow.get(M_COL_DATE)) or date.today()
+        meeting_date = _parse_date_any(mrow.get(M_COL_DATE)) or date.today()
+        ref_date = date.today()
 
         rem_df = reminders_for_project(project_title=project, ref_date=ref_date, max_level=8)
         fol_df = followups_for_project(project_title=project, ref_date=ref_date, exclude_entry_ids=set())
