@@ -2061,8 +2061,7 @@ function onScaleChange(){
 
 function enableTimelineDragScroll(){
   const viewport = document.getElementById('timelineViewport');
-  const primary = timelineScrollElements()[0];
-  if(!viewport || !primary || viewport.dataset.dragBound === '1') return;
+  if(!viewport || viewport.dataset.dragBound === '1') return;
   viewport.dataset.dragBound = '1';
   let down = false;
   let startX = 0;
@@ -2071,7 +2070,7 @@ function enableTimelineDragScroll(){
     if(e.target.closest('.gBar,[data-drawer-close],.timelineSplitter,button,a,input,select,label')) return;
     down = true;
     startX = e.pageX;
-    startLeft = primary.scrollLeft;
+    startLeft = viewport.scrollLeft;
     viewport.classList.add('dragging');
   });
   window.addEventListener('mouseup', () => { down = false; viewport.classList.remove('dragging'); });
@@ -2079,7 +2078,7 @@ function enableTimelineDragScroll(){
   viewport.addEventListener('mousemove', (e) => {
     if(!down) return;
     const dx = e.pageX - startX;
-    setTimelineScrollLeft(startLeft - dx);
+    viewport.scrollLeft = startLeft - dx;
   });
 }
 
@@ -2154,17 +2153,6 @@ function bindTimelineBarClicks(){
 }
 
 
-function timelineScrollElements(){
-  const viewport = document.getElementById('timelineViewport');
-  if(!viewport) return [];
-  return Array.from(viewport.querySelectorAll('[data-role="time-scroll"]'));
-}
-
-function setTimelineScrollLeft(left){
-  const els = timelineScrollElements();
-  els.forEach((el) => { el.scrollLeft = Math.max(0, left); });
-}
-
 function currentWindowMode(){
   return document.getElementById('timelineWindow')?.value || '3m';
 }
@@ -2179,8 +2167,8 @@ function scrollTimelineToDate(dateIso){
   const target = new Date(dateIso + 'T00:00:00');
   const days = Math.max(0, Math.floor((target - start)/86400000));
   const viewport = document.getElementById('timelineViewport');
-  const widthRef = viewport ? viewport.clientWidth : 1200;
-  setTimelineScrollLeft(Math.max(0, days * pxPerDay - (widthRef * 0.45)));
+  if(!viewport) return;
+  viewport.scrollLeft = Math.max(0, days * pxPerDay - (viewport.clientWidth * 0.45));
 }
 
 function goToday(){
@@ -2215,6 +2203,49 @@ function timelineDisplayState(it){
   if(!isNaN(end) && end < today) return 'late';
   if(!isNaN(start) && start > today) return 'future';
   return 'active';
+}
+
+
+const CRITICAL_LATE_DAYS = 10;
+
+function areaRiskStats(items){
+  const today = new Date(); today.setHours(0,0,0,0);
+  let late = 0;
+  let critical = 0;
+  let soon = 0;
+  items.forEach((i) => {
+    const state = timelineDisplayState(i);
+    const end = new Date((i.end || '') + 'T00:00:00');
+    if(state === 'late'){
+      late += 1;
+      if(!isNaN(end)){
+        const lateDays = Math.ceil((today - end)/86400000);
+        if(lateDays > CRITICAL_LATE_DAYS) critical += 1;
+      }
+      return;
+    }
+    if(!isNaN(end)){
+      const diff = Math.ceil((end - today)/86400000);
+      if(diff >= 0 && diff < 5) soon += 1;
+    }
+  });
+  return { late, critical, soon };
+}
+
+function areaRiskRank(stats){
+  if(stats.critical > 0) return 0;
+  if(stats.late > 0) return 1;
+  if(stats.soon > 0) return 2;
+  return 3;
+}
+
+function areaSignalHtml(stats){
+  const parts = [];
+  if(stats.late > 0) parts.push(`<span class="sig danger">🔴 ${stats.late} retard${stats.late>1?'s':''}</span>`);
+  if(stats.critical > 0) parts.push(`<span class="sig critical">⚠ ${stats.critical} critique${stats.critical>1?'s':''}</span>`);
+  if(stats.soon > 0) parts.push(`<span class="sig soon">⏳ ${stats.soon} échéance${stats.soon>1?'s':''} &lt;5j</span>`);
+  if(!parts.length) parts.push('<span class="sig ok">🟢 OK</span>');
+  return parts.join('');
 }
 
 function taskTooltip(it){
@@ -2307,26 +2338,6 @@ function bindTimelineTooltips(){
   });
 }
 
-function bindTimelineHorizontalSync(){
-  const viewport = document.getElementById('timelineViewport');
-  if(!viewport) return;
-  const synced = Array.from(viewport.querySelectorAll('[data-role="time-scroll"]'));
-  if(!synced.length) return;
-  const primary = synced[0];
-  if(primary.dataset.syncBound === '1') return;
-  primary.dataset.syncBound = '1';
-  let lock = false;
-  synced.forEach((el) => {
-    el.addEventListener('scroll', () => {
-      if(lock) return;
-      lock = true;
-      const left = el.scrollLeft;
-      synced.forEach((other) => { if(other !== el) other.scrollLeft = left; });
-      lock = false;
-    });
-  });
-}
-
 function renderTimeline(data){
   const timelineEl = document.getElementById('timeline');
   if(!timelineEl) return;
@@ -2393,7 +2404,17 @@ function renderTimeline(data){
   const collapsed = window.__tlCollapsed || {};
 
   const maxInitial = 200;
-  const sourceAreas = areas.map(a => ({area:a, items:grouped[a]}));
+  const sourceAreas = areas
+    .map(a => ({area:a, items:grouped[a], stats: areaRiskStats(grouped[a])}))
+    .sort((a,b) => {
+      const ra = areaRiskRank(a.stats);
+      const rb = areaRiskRank(b.stats);
+      if(ra !== rb) return ra - rb;
+      if(a.stats.critical !== b.stats.critical) return b.stats.critical - a.stats.critical;
+      if(a.stats.late !== b.stats.late) return b.stats.late - a.stats.late;
+      if(a.stats.soon !== b.stats.soon) return b.stats.soon - a.stats.soon;
+      return a.area.localeCompare(b.area,'fr');
+    });
   const fullCount = timeline.length;
   if(!window.__tlMaxRows || window.__tlMaxRows < maxInitial) window.__tlMaxRows = maxInitial;
 
@@ -2412,7 +2433,6 @@ function renderTimeline(data){
       const today2 = new Date(); today2.setHours(0,0,0,0);
       const diff = isNaN(end) ? null : Math.ceil((end - today2)/86400000);
       const isLate = dState === 'late';
-      const statusIcon = isLate ? '<span class="sevIcon">⚠</span>' : '';
       const detail = compact
         ? ''
         : `<div class="gMeta"><div>Responsable : ${it.owner || 'Non attribué'}</div><div>Échéance : ${it.end_txt || '-'}</div><div>${isLate ? 'Retard' : 'Restant'} : ${diff===null?'n/a':Math.abs(diff)+'j'}</div></div>`;
@@ -2420,20 +2440,20 @@ function renderTimeline(data){
       return `
         <div class="gRow ${dState} ${rowModeCls}">
           <div class="gItemCol">
-            <div class="gTitleLine">${statusIcon}<span class="gTitle" title="${taskTitle.replaceAll('"','&quot;')}">${taskTitle}</span></div>
+            <div class="gTitleLine"><span class="gTitle" title="${taskTitle.replaceAll('"','&quot;')}">${taskTitle}</span></div>
             ${detail}
           </div>
-          <div class="gTrack" data-role="time-scroll"><div style="width:${totalWidth}px;height:100%;position:relative">
+          <div class="gTrack" style="width:${totalWidth}px">
             <div class="gBar ${cls} ${meetingFx}" style="left:${left}px;width:${width}px" data-tip="${tip.replaceAll('"','&quot;')}" data-task-id="${escHtml(it.task_id)}" data-task-title="${escHtml(taskTitle)}" data-task-area="${escHtml(it.area || '')}" data-task-package="${escHtml(it.package || '')}" data-task-start="${escHtml(it.start_txt || '')}" data-task-end="${escHtml(it.end_txt || '')}" data-task-status="${escHtml(it.status || '')}" data-task-owner="${escHtml(it.owner || '')}" data-task-comment="${escHtml(it.comment || '')}">
               <span class="barTitle">${taskTitle}</span>
-            </div></div>
+            </div>
           </div>
         </div>`;
     }).join('');
   }
 
   let remaining = window.__tlMaxRows;
-  const sectionsHtml = sourceAreas.map(({area, items}) => {
+  const sectionsHtml = sourceAreas.map(({area, items, stats}) => {
     const isClosed = !!collapsed[area];
     const visibleItems = remaining > 0 ? items.slice(0, remaining) : [];
     remaining -= visibleItems.length;
@@ -2442,7 +2462,7 @@ function renderTimeline(data){
     return `
       <div class="gSection">
         <button class="gSectionHead" type="button" onclick="setSectionCollapsed(decodeURIComponent('${encodeURIComponent(area)}'))">
-          <span>${isClosed ? '▸' : '▾'}</span><span>${area}</span><span class="small">${items.length}</span><span class="zoneSignal">${(() => { const late=items.filter(i=>timelineDisplayState(i)==="late").length; const soon=items.filter(i=>{const d=new Date((i.end||"")+"T00:00:00"); const t=new Date(); t.setHours(0,0,0,0); const diff=Math.ceil((d-t)/86400000); return diff>=0 && diff<5;}).length; if(late>0) return `🔴 ${late} retard${late>1?"s":""}`; if(soon>0) return `🟡 ${soon} proche${soon>1?"s":""}`; return "🟢 OK"; })()}</span>
+          <span>${isClosed ? '▸' : '▾'}</span><span>${area}</span><span class="small">${items.length}</span><span class="zoneSignal">${areaSignalHtml(stats)}</span>
         </button>
         ${sectionRows}
         ${(!isClosed && hiddenCount>0) ? `<div class="small" style="padding:4px 10px">+${hiddenCount} tâche(s) masquée(s) (lazy)</div>` : ''}
@@ -2452,7 +2472,7 @@ function renderTimeline(data){
   timelineEl.innerHTML = `
     <div class="gViewport" id="timelineViewport" style="--title-col-width:320px">
       <div class="gTop" id="timelineRoot" data-start="${startIso}" data-end="${endIso}" data-view-start="${viewStart.toISOString().slice(0,10)}" data-px-per-day="${pxPerDay}">
-        <div class="gTopLeft">Tâches</div><div class="gTopRight" data-role="time-scroll"><div class="gTicks" style="width:${totalWidth}px">${ticksHtml}</div></div>
+        <div class="gTopLeft">Tâches</div><div class="gTopRight" style="width:${totalWidth}px"><div class="gTicks">${ticksHtml}</div></div>
       </div>
       <div class="gBody"><div id="timelineSplitGuide" class="splitGuide"></div>
         <div class="meetingBg" style="left:${Math.max(0, meetLeft-8)}px"></div><div class="meetingLine" style="left:${meetLeft}px"><span>Réunion</span></div>
@@ -2465,14 +2485,13 @@ function renderTimeline(data){
   const viewport = document.getElementById('timelineViewport');
   if(viewport){
     const targetLeft = Math.max(0, meetLeft - (viewport.clientWidth * 0.45));
-    setTimelineScrollLeft(targetLeft);
+    viewport.scrollLeft = targetLeft;
   }
   enableTimelineDragScroll();
   bindTimelineTooltips();
   bindTimelineResizer();
   bindTimelineDrawer();
   bindTimelineBarClicks();
-  bindTimelineHorizontalSync();
 }
 
 async function refreshDashboard(){
@@ -2557,7 +2576,7 @@ select{{width:100%;padding:12px 12px;border-radius:12px;border:1px solid var(--b
 .timelineZoom input[type=range]{{width:110px}}
 .timelineZoomLabel{{font-size:12px;font-weight:900;color:var(--muted);min-width:100px}}
 .gantt{{border:1px solid var(--border);border-radius:12px;background:#fff;padding:10px;overflow:hidden;position:relative}}
-.gViewport{{overflow-y:auto;overflow-x:hidden;max-height:64vh;border:1px solid var(--border);border-radius:10px;scrollbar-gutter:stable both-edges;position:relative}}
+.gViewport{{overflow:auto;max-height:64vh;border:1px solid var(--border);border-radius:10px;scrollbar-gutter:stable both-edges;position:relative;cursor:grab}}
 .gViewport.dragging{{cursor:grabbing}}
 .timelineSplitter{{position:absolute;top:34px;bottom:0;width:6px;cursor:col-resize;z-index:6;background:transparent;transition:background .15s ease}}
 .timelineSplitter:hover{{background:rgba(15,23,42,.08)}}
@@ -2565,26 +2584,30 @@ select{{width:100%;padding:12px 12px;border-radius:12px;border:1px solid var(--b
 .gViewport.resizing .splitGuide{{display:block}}
 .gViewport.resizing .timelineSplitter{{background:rgba(15,23,42,.12)}}
 @media (max-width:1199px){{.timelineSplitter,.splitGuide{{display:none!important}}.gViewport{{--title-col-width:300px!important}}}}
-.gTop{{position:sticky;top:0;z-index:5;background:#fff;display:grid;grid-template-columns:var(--title-col-width,320px) minmax(0,1fr)}}
+.gTop{{position:sticky;top:0;z-index:5;background:#fff;display:grid;grid-template-columns:var(--title-col-width,320px) max-content}}
 .gTopLeft{{position:sticky;left:0;z-index:6;background:#fff;border-bottom:1px solid var(--border);border-right:1px solid #eef2f7;padding:7px 10px;font-weight:900}}
-.gTopRight{{position:relative;height:34px;border-bottom:1px solid var(--border);background:#f8fafc;overflow-x:auto;overflow-y:hidden}}
+.gTopRight{{position:relative;height:34px;border-bottom:1px solid var(--border);background:#f8fafc}}
 .gTicks{{position:relative;height:100%}}
 .gTick{{position:absolute;top:0;bottom:0;border-left:1px solid #cbd5e1;border-right:1px solid #e2e8f0;font-size:11px;font-weight:900;color:#334155;display:flex;align-items:center;justify-content:center;white-space:nowrap;background:rgba(248,250,252,.92);overflow:hidden}}
 .gTick span{{padding:0 6px;text-overflow:ellipsis;overflow:hidden}}
-.gBody{{position:relative}}
+.gBody{{position:relative;min-width:max-content}}
 .todayLine{{position:absolute;top:0;bottom:0;width:2px;background:#dc2626;opacity:.9;z-index:1}}
-.gRow{{display:grid;grid-template-columns:var(--title-col-width,320px) minmax(0,1fr);align-items:stretch;min-height:34px}}
+.gRow{{display:grid;grid-template-columns:var(--title-col-width,320px) max-content;align-items:stretch;min-height:34px}}
 .gItemCol{{position:sticky;left:0;z-index:4;background:#fff;border-right:1px solid #eef2f7;padding:6px 10px;height:100%;display:flex;flex-direction:column;justify-content:center}}
 .gTitleLine{{display:flex;align-items:center;gap:6px;min-width:0}}
 .gTitle{{font-size:14px;font-weight:600;display:-webkit-box;-webkit-box-orient:vertical;overflow:hidden;line-height:1.2;word-break:break-word}}
 .gRow.compact .gTitle{{-webkit-line-clamp:2}}
 .gRow.detailed .gTitle{{-webkit-line-clamp:3}}
-.sevIcon{{font-size:13px;line-height:1;color:#dc2626}}
-.gTrack{{position:relative;height:100%;min-height:34px;border-bottom:1px solid #f8fafc;background:repeating-linear-gradient(to right,#fff,#fff 239px,#fcfdff 239px,#fcfdff 240px);overflow-x:auto;overflow-y:hidden}}
+.gTrack{{position:relative;height:100%;min-height:34px;border-bottom:1px solid #f8fafc;background:repeating-linear-gradient(to right,#fff,#fff 239px,#fcfdff 239px,#fcfdff 240px)}}
 .gSection:nth-child(even) .gRow .gTrack{{border-bottom-color:transparent}}
 .gSection{{margin-bottom:6px}}
 .gSectionHead{{display:flex;align-items:center;gap:8px;width:100%;text-align:left;border:0;background:#f8fafc;border-bottom:1px solid #e2e8f0;padding:7px 10px;font-weight:900;position:sticky;left:0;z-index:6}}
-.zoneSignal{{margin-left:auto;font-size:12px;font-weight:900}}
+.zoneSignal{{margin-left:auto;font-size:12px;font-weight:900;display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end}}
+.zoneSignal .sig{{display:inline-flex;align-items:center;padding:2px 7px;border-radius:999px;background:#f8fafc;border:1px solid #e2e8f0;color:#334155;white-space:nowrap}}
+.zoneSignal .sig.danger{{background:#fff7f7;color:#991b1b;border-color:#fee2e2}}
+.zoneSignal .sig.critical{{background:#fffaf0;color:#9a3412;border-color:#ffedd5}}
+.zoneSignal .sig.soon{{background:#fffbeb;color:#92400e;border-color:#fef3c7}}
+.zoneSignal .sig.ok{{background:#f0fdf4;color:#166534;border-color:#dcfce7}}
 .gBar{{position:absolute;min-height:26px;height:26px;top:4px;border-radius:6px;padding:2px 8px;font-size:12px;font-weight:700;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;border:1px solid rgba(15,23,42,.28);color:#0b1220;display:flex;align-items:center;box-shadow:0 1px 4px rgba(15,23,42,.08);transform-origin:center;transition:transform .15s ease, box-shadow .15s ease}}
 .gBar:hover{{transform:translateY(-1px);box-shadow:0 4px 10px rgba(15,23,42,.12)}}
 .barTitle{{display:inline-block;max-width:100%;overflow:hidden;text-overflow:ellipsis}}
