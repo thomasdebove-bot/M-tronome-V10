@@ -5297,6 +5297,11 @@ def api_meeting_company_mail_draft(
                 itype = "memo"
                 done_label = "/"
 
+            lot_vals = _split_multi_labels(str(r.get(E_COL_PACKAGES, "") or "").strip())
+            lot_vals = [x for x in lot_vals if str(x).strip()]
+            if not lot_vals:
+                lot_vals = ["Sans lot"]
+
             items_all.append({
                 "type": itype,
                 "subject": str(r.get(E_COL_TITLE, "") or "").strip() or "(sans titre)",
@@ -5304,7 +5309,7 @@ def api_meeting_company_mail_draft(
                 "due_date": due_date,
                 "done_date": done_date,
                 "done_label": done_label,
-                "concerne": concerne_filtered,
+                "concerne": lot_vals,
                 "area": _clean_area_name(str(r.get("__area_list__", "") or "").strip() or "Généralité"),
                 "reminder_level": rem_lvl,
             })
