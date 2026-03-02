@@ -1955,7 +1955,20 @@ function renderRows(targetId, rows, leftKey, rightKey){
   const box = document.getElementById(targetId);
   if(!box) return;
   if(!rows || !rows.length){ box.innerHTML = '<div class="empty">Aucune donnée.</div>'; return; }
-  box.innerHTML = rows.map(r => `<div class="row"><div>${r[leftKey]||''}</div><strong>${r[rightKey]||0}</strong></div>`).join('');
+  box.innerHTML = rows.map(r => {
+    const logo = (r.logo || '').trim();
+    const logoHtml = /^https?:\/\//i.test(logo) ? `<img class="coMini" src="${logo}" alt="" loading="lazy"/>` : '';
+    return `<div class="row"><div class="rowMain">${logoHtml}<span>${r[leftKey]||''}</span></div><strong>${r[rightKey]||0}</strong></div>`;
+  }).join('');
+}
+
+function currentTimelineView(){
+  return document.getElementById('timelineViewMode')?.value || 'frise';
+}
+
+function renderDashboardView(data){
+  if(currentTimelineView() === 'calendar') renderCalendar(data);
+  else renderTimeline(data);
 }
 
 function fillSelect(id, options, selectedValue, allLabel){
@@ -2051,12 +2064,12 @@ function bumpZoom(delta){
   const next = Math.max(0, Math.min(3, Number(el.value || 1) + delta));
   el.value = String(next);
   syncZoomLabel();
-  renderTimeline(window.__homeDashboardData || null);
+  renderDashboardView(window.__homeDashboardData || null);
 }
 
 function onScaleChange(){
   syncZoomLabel();
-  renderTimeline(window.__homeDashboardData || null);
+  renderDashboardView(window.__homeDashboardData || null);
 }
 
 function enableTimelineDragScroll(){
@@ -2249,7 +2262,7 @@ function goFirstReminder(){
 function setSectionCollapsed(area){
   window.__tlCollapsed = window.__tlCollapsed || {};
   window.__tlCollapsed[area] = !window.__tlCollapsed[area];
-  renderTimeline(window.__homeDashboardData || null);
+  renderDashboardView(window.__homeDashboardData || null);
 }
 
 function timelineDisplayState(it){
@@ -2395,6 +2408,32 @@ function bindTimelineTooltips(){
   });
 }
 
+function renderCalendar(data){
+  const timelineEl = document.getElementById('timeline');
+  if(!timelineEl) return;
+  const timeline = (data?.timeline || []).slice().sort((a,b) => String(a.start||'').localeCompare(String(b.start||'')));
+  if(!timeline.length){
+    timelineEl.innerHTML = '<div class="empty">Aucune donnée calendrier selon les filtres.</div>';
+    return;
+  }
+  const byDay = {};
+  timeline.forEach((it) => {
+    const key = String(it.start || '').trim();
+    if(!key) return;
+    if(!byDay[key]) byDay[key] = [];
+    byDay[key].push(it);
+  });
+  const days = Object.keys(byDay).sort((a,b) => a.localeCompare(b));
+  timelineEl.innerHTML = `<div class="calendarBoard">${days.map((dayIso) => {
+    const items = byDay[dayIso] || [];
+    const dayLbl = items[0]?.start_txt || dayIso;
+    return `<div class="calDay"><div class="calHead">${dayLbl}</div>${items.map((it) => {
+      const cls = it.package_color || 'pkg-default';
+      return `<div class="calItem"><span class="calDot ${cls}"></span><span class="calTxt">${it.title || 'Tâche sans titre'}</span></div>`;
+    }).join('')}</div>`;
+  }).join('')}</div>`;
+}
+
 function renderTimeline(data){
   const timelineEl = document.getElementById('timeline');
   if(!timelineEl) return;
@@ -2537,7 +2576,7 @@ function renderTimeline(data){
         ${sectionsHtml}
       </div>
     <div id="timelineSplitter" class="timelineSplitter" aria-hidden="true"></div></div>
-    ${fullCount>window.__tlMaxRows ? `<div class='small' style='margin-top:6px'>Lazy mode actif: ${Math.min(window.__tlMaxRows, fullCount)}/${fullCount} tâches affichées. <button class="btnLite" type="button" onclick="window.__tlMaxRows += 120; renderTimeline(window.__homeDashboardData || null)">Charger +120</button></div>` : ''}`;
+    ${fullCount>window.__tlMaxRows ? `<div class='small' style='margin-top:6px'>Lazy mode actif: ${Math.min(window.__tlMaxRows, fullCount)}/${fullCount} tâches affichées. <button class="btnLite" type="button" onclick="window.__tlMaxRows += 120; renderDashboardView(window.__homeDashboardData || null)">Charger +120</button></div>` : ''}`;
 
   const viewport = document.getElementById('timelineViewport');
   if(viewport){
@@ -2570,20 +2609,24 @@ async function refreshDashboard(){
   renderRows('companyBox', data.kpis?.company_cumulative || [], 'name', 'count');
 
   syncZoomLabel();
-  renderTimeline(data);
+  renderDashboardView(data);
 
   fillSelect('filterArea', data.filters?.areas || [], area, 'Toutes les zones');
   fillSelect('filterPackage', data.filters?.packages || [], pack, 'Tous les lots');
 
-  const ai = data.ai_summary_by_area || {};
+  const snap = data.summary_snapshot || {};
   const aiEl = document.getElementById('aiSummary');
-  const keys = Object.keys(ai);
-  aiEl.innerHTML = keys.length
-    ? keys.map(k => {
-        const z = ai[k] || {};
-        return `<div class="row" style="align-items:flex-start;gap:16px"><strong style="min-width:180px">${k}<br/><span class="small">${z.status || ''}</span></strong><div style="max-width:78%"><div><strong>Indicateurs:</strong> ${z.indicators || ''}</div><div><strong>Analyse:</strong> ${z.analysis || ''}</div><div><strong>🎯 Action prioritaire:</strong> ${z.action || ''}</div></div></div>`;
-      }).join('')
-    : '<div class="empty">Pas de synthèse disponible pour ces filtres.</div>';
+  const perims = snap.by_perimeter || [];
+  const openByCompany = snap.company_open_reminders || [];
+  const closedByCompany = snap.company_closed_reminders || [];
+  aiEl.innerHTML = `
+    <div><strong>Mini synthèse :</strong> ${snap.open_subjects_total ?? 0} sujet(s) ouvert(s), dont ${snap.reminder_total ?? 0} en rappel.</div>
+    ${perims.length ? `<div style="margin-top:8px">${perims.map(p => `<div class="row" style="align-items:flex-start"><div><strong>${p.perimeter}</strong><div class="small">${p.open_subjects} ouverts • ${p.reminders} rappels</div>${(p.reminder_subjects||[]).length ? `<div class="small">Rappels: ${(p.reminder_subjects||[]).join(' • ')}</div>` : ''}</div></div>`).join('')}</div>` : '<div class="empty" style="margin-top:8px">Aucun sujet ouvert selon les filtres.</div>'}
+    <div style="margin-top:10px"><strong>Rappels ouverts (entreprises)</strong></div>
+    <div>${openByCompany.length ? openByCompany.map(c => `<div class="row"><div class="rowMain">${(/^https?:\/\//i.test(c.logo||'')) ? `<img class="coMini" src="${c.logo}" alt="" loading="lazy"/>` : ''}<span>${c.name||'—'}</span></div><strong>${c.count||0}</strong></div>`).join('') : '<div class="empty">Aucune donnée.</div>'}</div>
+    <div style="margin-top:10px"><strong>Rappels fermés (entreprises)</strong></div>
+    <div>${closedByCompany.length ? closedByCompany.map(c => `<div class="row"><div class="rowMain">${(/^https?:\/\//i.test(c.logo||'')) ? `<img class="coMini" src="${c.logo}" alt="" loading="lazy"/>` : ''}<span>${c.name||'—'}</span></div><strong>${c.count||0}</strong></div>`).join('') : '<div class="empty">Aucune donnée.</div>'}</div>
+  `;
 }
 
 window.addEventListener('DOMContentLoaded', refreshDashboard);
@@ -2617,6 +2660,8 @@ select{{width:100%;padding:12px 12px;border-radius:12px;border:1px solid var(--b
 .kpi .value{{font-weight:1000;font-size:24px;margin-top:6px}}
 .listBox{{border:1px solid var(--border);border-radius:12px;padding:10px;background:var(--soft);max-height:230px;overflow:auto}}
 .row{{display:flex;justify-content:space-between;gap:10px;padding:7px 0;border-bottom:1px dashed #dbe3ef}}
+.rowMain{{display:flex;align-items:center;gap:8px;min-width:0}}
+.coMini{{width:18px;height:18px;border-radius:999px;border:1px solid #dbe3ef;object-fit:cover;flex:0 0 auto}}
 .row:last-child{{border-bottom:none}}
 .badge{{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:900;text-transform:uppercase}}
 .b-rappel{{background:#fee2e2;color:var(--late)}}
@@ -2633,6 +2678,18 @@ select{{width:100%;padding:12px 12px;border-radius:12px;border:1px solid var(--b
 .timelineZoom input[type=range]{{width:110px}}
 .timelineZoomLabel{{font-size:12px;font-weight:900;color:var(--muted);min-width:100px}}
 .gantt{{border:1px solid var(--border);border-radius:12px;background:#fff;padding:10px;overflow:hidden;position:relative}}
+.calendarBoard{{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px;max-height:64vh;overflow:auto}}
+.calDay{{border:1px solid var(--border);border-radius:10px;padding:8px;background:#fff}}
+.calHead{{font-weight:900;margin-bottom:6px}}
+.calItem{{display:flex;align-items:flex-start;gap:6px;padding:4px 0}}
+.calDot{{width:10px;height:10px;border-radius:999px;margin-top:4px;border:1px solid rgba(15,23,42,.2);flex:0 0 auto}}
+.calDot.pkg-cvc{{background:#22d3ee}}
+.calDot.pkg-plb{{background:#ff00cc}}
+.calDot.pkg-ele{{background:#22c55e}}
+.calDot.pkg-goe{{background:#7f1d1d}}
+.calDot.pkg-syn{{background:#f59e0b}}
+.calDot.pkg-default{{background:#cbd5e1}}
+.calTxt{{font-size:13px;line-height:1.3}}
 .gViewport{{overflow:auto;max-height:64vh;border:1px solid var(--border);border-radius:10px;scrollbar-gutter:stable both-edges;position:relative;cursor:grab}}
 .gViewport.dragging{{cursor:grabbing}}
 .timelineSplitter{{position:absolute;top:34px;bottom:0;width:6px;cursor:col-resize;z-index:6;background:transparent;transition:background .15s ease}}
@@ -2699,7 +2756,7 @@ select{{width:100%;padding:12px 12px;border-radius:12px;border:1px solid var(--b
 .drawerHead{{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:14px 16px;border-bottom:1px solid var(--border);font-weight:1000}}
 .drawerClose{{border:1px solid var(--border);background:#fff;border-radius:10px;width:32px;height:32px;font-size:18px;font-weight:900;cursor:pointer}}
 .drawerBody{{padding:16px 18px 14px;overflow:auto;display:grid;gap:12px;background:#fff}}
-.drawerTitle{{font-size:24px;line-height:1.2;font-weight:1000;margin:0;word-break:break-word;letter-spacing:-.01em}}
+.drawerTitle{{font-size:20px;line-height:1.26;font-weight:800;margin:0;word-break:break-word;letter-spacing:-.005em}}
 .drawerSubline{{font-size:14px;color:#64748b;font-weight:700}}
 .drawerTimeSignal{{font-size:14px;font-weight:900;background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:8px 10px;display:inline-flex;max-width:max-content}}
 .drawerInfo{{display:grid;gap:6px}}
@@ -2768,7 +2825,8 @@ body.drawerOpen{{overflow:hidden}}
             <option value="reminders">Rappels uniquement</option>
             <option value="all">Tous</option>
           </select>
-          <select id="timelineWindow" onchange="renderTimeline(window.__homeDashboardData || null)">
+          <select id="timelineViewMode" onchange="renderDashboardView(window.__homeDashboardData || null)"><option value="frise" selected>Vue frise chronologique</option><option value="calendar">Vue calendrier</option></select>
+          <select id="timelineWindow" onchange="renderDashboardView(window.__homeDashboardData || null)">
             <option value="4w">Prochaines 4 semaines</option>
             <option value="3m" selected>Prochains 3 mois</option>
             <option value="all">Plage complète</option>
@@ -2780,14 +2838,14 @@ body.drawerOpen{{overflow:hidden}}
             <span class="timelineZoomLabel" id="timelineScaleLabel">Échelle: semaine</span>
           </div>
           <button type="button" class="btnLite" onclick="goToday()">Aujourd'hui</button>
-          <button type="button" class="btnLite" onclick="goFirstReminder()">Aller aux rappels</button><label class="btnLite" style="display:inline-flex;align-items:center;gap:8px"><input id="compactView" type="checkbox" checked onchange="renderTimeline(window.__homeDashboardData || null)"/> Vue compacte</label>
+          <button type="button" class="btnLite" onclick="goFirstReminder()">Aller aux rappels</button><label class="btnLite" style="display:inline-flex;align-items:center;gap:8px"><input id="compactView" type="checkbox" checked onchange="renderDashboardView(window.__homeDashboardData || null)"/> Vue compacte</label>
         </div>
       </div>
       <div class="timelineLegend"><span class="lg pkg-cvc">CVC</span><span class="lg pkg-plb">PLB</span><span class="lg pkg-ele">ELE/CFA/CFO</span><span class="lg pkg-goe">GOE/STR</span><span class="lg pkg-syn">Synthèse</span><span class="lg warn">! Rappel</span></div><div id="timeline" class="gantt" style="margin-top:10px"><div class="empty">Aucune donnée.</div></div>
     </div>
 
     <div class="card">
-      <div style="font-weight:1000;margin-bottom:8px">Résumé IA des sujets à suivre par zone / périmètre</div>
+      <div style="font-weight:1000;margin-bottom:8px">Synthèse des sujets ouverts par périmètre</div>
       <div id="aiSummary" class="listBox"><div class="empty">Sélectionnez une réunion.</div></div>
     </div>
   </div>
@@ -4364,6 +4422,42 @@ def api_home_meeting_dashboard(
         package_options = sorted({str(a) for a in entries.get("__package_list__", pd.Series([], dtype=str)).dropna().astype(str) if str(a).strip()})
         ai_summary = _build_ai_summary_by_area(entries, ref_date)
 
+        entries_for_summary = entries.copy()
+        if not entries_for_summary.empty:
+            entries_for_summary["__completed__"] = _series(entries_for_summary, E_COL_COMPLETED, False).apply(_bool_true)
+            entries_for_summary["__company__"] = _series(entries_for_summary, E_COL_COMPANY_TASK, "").fillna("").astype(str).str.strip().replace("", "Non renseigné")
+        open_subjects_total = 0
+        reminder_total = 0
+        by_perimeter = []
+        closed_company_counts = []
+        if not entries_for_summary.empty:
+            open_df_all = entries_for_summary.loc[entries_for_summary["__completed__"] == False].copy()
+            open_subjects_total = int(len(open_df_all))
+            reminder_total = int((open_df_all["__deadline__"] < ref_date).sum()) if not open_df_all.empty else 0
+            if not open_df_all.empty:
+                for area_name, g in open_df_all.groupby("__area_list__", dropna=False):
+                    rem_g = g.loc[g["__deadline__"] < ref_date]
+                    rem_titles = [str(t).strip() for t in rem_g.get(E_COL_TITLE, pd.Series([], dtype=str)).fillna("").astype(str).tolist() if str(t).strip()][:3]
+                    by_perimeter.append({
+                        "perimeter": str(area_name) if str(area_name).strip() else "Général",
+                        "open_subjects": int(len(g)),
+                        "reminders": int(len(rem_g)),
+                        "reminder_subjects": rem_titles,
+                    })
+                by_perimeter = sorted(by_perimeter, key=lambda x: (-int(x["reminders"]), -int(x["open_subjects"]), str(x["perimeter"])))
+            closed_df = entries_for_summary.loc[(entries_for_summary["__completed__"] == True) & (entries_for_summary["__deadline__"] < ref_date)].copy()
+            if not closed_df.empty:
+                g = closed_df.groupby("__company__", dropna=False).size().reset_index(name="count")
+                g = g.sort_values("count", ascending=False)
+                closed_company_counts = [
+                    {
+                        "name": str(r["__company__"]),
+                        "logo": str(company_logo_map.get(_norm_name(str(r["__company__"])), "") or "").strip(),
+                        "count": int(r["count"]),
+                    }
+                    for _, r in g.head(12).iterrows()
+                ]
+
         return {
             "kpis": {
                 "open_reminders": int(len(rem_df)),
@@ -4378,6 +4472,13 @@ def api_home_meeting_dashboard(
             },
             "filters": {"areas": area_options, "packages": package_options},
             "ai_summary_by_area": ai_summary,
+            "summary_snapshot": {
+                "open_subjects_total": int(open_subjects_total),
+                "reminder_total": int(reminder_total),
+                "by_perimeter": by_perimeter,
+                "company_open_reminders": company_counts,
+                "company_closed_reminders": closed_company_counts,
+            },
             "reference_date": ref_date.isoformat(),
         }
     except MissingDataError as err:
