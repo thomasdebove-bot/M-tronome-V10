@@ -869,14 +869,16 @@ def build_company_email_html(
         return str(value or "").replace("\r\n", "\n").replace("\r", "\n")
     def _cell_text(value: str) -> str:
         return escape(_safe_text(value)).replace("\n", "<br/>")
-    def td(val: str, center: bool = False) -> str:
+    def td(val: str, center: bool = False, raw: bool = False) -> str:
         align = "center" if center else "left"
-        return f'<td style="border:1px solid #999;padding:6px;vertical-align:top;text-align:{align};">{_cell_text(val)}</td>'
+        body = str(val or "") if raw else _cell_text(val)
+        return f'<td style="border:1px solid #999;padding:6px;vertical-align:top;text-align:{align};">{body}</td>'
 
-    def tr(cells: list[str]) -> str:
+    def tr(cells: list[str], raw_indices: Optional[set[int]] = None) -> str:
+        raw_indices = raw_indices or set()
         parts = []
         for idx, c in enumerate(cells):
-            parts.append(td(c, center=(idx > 0)))
+            parts.append(td(c, center=(idx > 0), raw=(idx in raw_indices)))
         return "<tr>" + "".join(parts) + "</tr>"
 
     area_map: Dict[str, List[dict]] = {}
@@ -936,13 +938,13 @@ def build_company_email_html(
             is_reminder = str(it.get("type") or "") == "reminder"
             if is_reminder:
                 rl = int(it.get("reminder_level") or 1)
-                fait_le = f"RAPPEL {rl}"
+                fait_le = f'<span style="color:#b91c1c;font-weight:700">RAPPEL {rl}</span>'
+                raw_cols = {3}
             else:
                 fait_le = str(it.get("done_label") or "").strip() or ("/" if str(it.get("type") or "") == "memo" else "")
+                raw_cols = set()
             concerne = ", ".join([str(x).strip() for x in (it.get("concerne") or []) if str(x).strip()]) or company_name
-            row_html = tr([sujet, ecrit_le, pour_le, fait_le, concerne])
-            if is_reminder:
-                row_html = row_html.replace('<tr>', '<tr style="color:#b91c1c;font-weight:700;">', 1)
+            row_html = tr([sujet, ecrit_le, pour_le, fait_le, concerne], raw_indices=raw_cols)
             rows_html.append(row_html)
 
         table_html = '<table style="width:100%;border-collapse:collapse;border:1px solid #999;">' + header + '<tbody>' + ''.join(rows_html) + '</tbody></table>'
@@ -5214,6 +5216,20 @@ def api_meeting_company_mail_draft(
                 if not in_period:
                     continue
 
+            # Fenêtre par défaut (si aucune période saisie):
+            # - entrées disponibles à la date de réunion (open/memos)
+            # - rappels
+            # - sujets "fait-le" dans les 2 semaines avant la réunion
+            if not p_start and not p_end:
+                if is_task and is_completed:
+                    if not isinstance(done_date, date):
+                        continue
+                    if not (meeting_date - timedelta(days=14) <= done_date <= meeting_date):
+                        continue
+                else:
+                    if isinstance(created_date, date) and created_date > meeting_date:
+                        continue
+
             if is_task and not is_completed and isinstance(due_date, date) and due_date < meeting_date:
                 itype = "reminder"
                 rem_lvl = int(reminder_level(due_date, False, meeting_date) or 1)
@@ -5222,8 +5238,8 @@ def api_meeting_company_mail_draft(
                 itype = "open"
                 done_label = ""
             elif is_task and is_completed:
-                # On n'inclut pas les sujets faits dans le mail entreprise (open only + rappels + mémos)
-                continue
+                itype = "done"
+                done_label = _fmt_mail_date(done_date) if isinstance(done_date, date) else ""
             else:
                 itype = "memo"
                 done_label = "/"
