@@ -2045,17 +2045,6 @@ LAYOUT_CONTROLS_JS = r"""
   }
 
   document.addEventListener('click', (e) => {
-    const btn = e.target.closest('.zoneBtn');
-    if(btn){
-      const action = btn.dataset.action || '';
-      const zone = closestZone(btn);
-      if(!zone) return;
-      if(action === 'highlight'){
-        zone.classList.toggle('highlight');
-      }
-      return;
-    }
-
     if(e.target.closest('#btnZoneOrder')){
       openZoneOrderModal();
       return;
@@ -4076,8 +4065,7 @@ def render_cr(
           <div class="zoneTitle">
             <span>{zt}</span>
             <div class="zoneTools noPrint">
-              <button class="zoneBtn" type="button" data-action="highlight">Surligner</button>
-                                                        <button class="btnAddMemo" type="button" data-area="{zt}">+ Ajouter mémo</button>
+              <button class="btnAddMemo" type="button" data-area="{zt}">+ Ajouter mémo</button>
             </div>
           </div>
           <table class="crTable">
@@ -4361,8 +4349,6 @@ body.printPreviewMode .noPrintRow{{display:none!important}}
 }}
 .zoneTitle button{{margin-left:auto}}
 .zoneTools{{display:flex;align-items:center;gap:6px;margin-left:auto}}
-.zoneBtn{{border:1px solid #ffffff;background:#fff;border-radius:8px;padding:4px 8px;font-weight:800;cursor:pointer}}
-.zoneBlock.highlight{{box-shadow:0 0 0 2px #f59e0b inset; background:linear-gradient(180deg,#fff7ed,#fff)}}
 .zoneBlock.pageBreakBefore{{page-break-before:always}}
 .u-page-break{{break-before:page;page-break-before:always;}}
 .u-avoid-break{{break-inside:avoid;page-break-inside:avoid;}}
