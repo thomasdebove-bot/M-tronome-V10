@@ -1801,8 +1801,16 @@ LAYOUT_CONTROLS_JS = r"""
 (function(){
   function closestZone(el){ return el.closest('.zoneBlock'); }
 
+  function zoneHasData(zone){
+    if(!zone) return false;
+    if(zone.classList.contains('rowHidden')) return false;
+    const visibleRows = zone.querySelectorAll('tr.rowItem:not(.rowHidden)');
+    if(visibleRows.length > 0) return true;
+    return !zone.classList.contains('rowHidden') && !!zone.querySelector('tbody tr');
+  }
+
   function getZones(){
-    return Array.from(document.querySelectorAll('.reportBlocks .zoneBlock'));
+    return Array.from(document.querySelectorAll('.reportBlocks .zoneBlock')).filter(zoneHasData);
   }
 
   function openZoneOrderModal(){
@@ -1815,6 +1823,9 @@ LAYOUT_CONTROLS_JS = r"""
       const name = (title ? title.textContent : zone.getAttribute('data-zone-id') || `Périmètre ${idx+1}`) || `Périmètre ${idx+1}`;
       return `<li class="zoneOrderItem" draggable="true" data-zone-index="${idx}"><span class="zoneOrderGrip">⋮⋮</span><span class="zoneOrderText">${name}</span></li>`;
     }).join('');
+    if(!zones.length){
+      list.innerHTML = '<li class="zoneOrderItem" draggable="false"><span class="zoneOrderText">Aucun périmètre avec données à réordonner.</span></li>';
+    }
 
     let dragItem = null;
     list.querySelectorAll('.zoneOrderItem').forEach(item => {
