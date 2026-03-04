@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>M-tronome - Tableau de réunion</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="layout">
+      <header>
+        <h1>Dashboard comptes-rendus de réunion</h1>
+        <p>
+          Sélectionnez une réunion pour voir les KPI de rappels ouverts, les entreprises les
+          plus sollicitées et un calendrier des rendus.
+        </p>
+      </header>
+
+      <section class="panel controls">
+        <label for="meeting-select">Réunion</label>
+        <select id="meeting-select"></select>
+
+        <label for="zone-filter">Zone</label>
+        <select id="zone-filter">
+          <option value="all">Toutes les zones</option>
+        </select>
+
+        <label for="lot-filter">Lot</label>
+        <select id="lot-filter">
+          <option value="all">Tous les lots</option>
+        </select>
+      </section>
+
+      <section class="kpi-grid" id="kpi-grid">
+        <article class="panel kpi-card">
+          <h2>Rappels ouverts</h2>
+          <p id="open-reminders" class="value">0</p>
+        </article>
+
+        <article class="panel kpi-card">
+          <h2>Attribution des rappels</h2>
+          <ul id="assignee-breakdown" class="metric-list"></ul>
+        </article>
+
+        <article class="panel kpi-card">
+          <h2>Rappels cumulés par entreprise</h2>
+          <ol id="company-breakdown" class="metric-list"></ol>
+        </article>
+      </section>
+
+      <section class="panel">
+        <div class="calendar-header">
+          <h2>Calendrier des rendus</h2>
+          <span id="calendar-summary"></span>
+        </div>
+        <div id="calendar" class="calendar"></div>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>
