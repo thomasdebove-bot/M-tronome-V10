@@ -1528,6 +1528,119 @@ ANALYSIS_MODAL_JS = r"""
 })();
 """
 
+TOOLS_MODAL_CSS = r"""
+.toolsModal{position:fixed; inset:0; padding:16px 16px 16px 290px; background:rgba(0,0,0,.35); display:none; align-items:flex-start; justify-content:center; overflow:auto; z-index:9996}
+.toolsModal .panel{background:#fff; width:min(980px, calc(100vw - 330px)); max-height:calc(100vh - 32px); overflow:auto; border-radius:16px; box-shadow:0 20px 60px rgba(0,0,0,.25)}
+@media (max-width:1200px){.toolsModal{padding:16px}.toolsModal .panel{width:min(980px,94vw)}}
+.toolsTabs{display:flex;gap:8px;padding:0 18px 12px;border-bottom:1px solid #eee}
+.toolsTab{padding:8px 12px;border:1px solid #cbd5e1;background:#fff;border-radius:10px;font-weight:900;cursor:pointer}
+.toolsTab.active{background:#0f172a;color:#fff;border-color:#0f172a}
+.toolsBody{padding:14px 18px}
+.toolsPane{display:none}
+.toolsPane.active{display:block}
+"""
+
+TOOLS_MODAL_HTML = r"""
+<div class="toolsModal" id="toolsModal">
+  <div class="panel">
+    <div class="head" style="display:flex;gap:12px;align-items:center;padding:16px 18px;border-bottom:1px solid #eee">
+      <h3 style="margin:0">Outils</h3>
+      <div style="margin-left:auto"></div>
+      <button class="memoBtn" id="toolsModalClose" type="button">Fermer</button>
+    </div>
+    <div class="toolsTabs">
+      <button class="toolsTab active" type="button" data-tools-tab="quality">Qualité du texte</button>
+      <button class="toolsTab" type="button" data-tools-tab="analysis">Analyse</button>
+    </div>
+    <div class="toolsBody">
+      <div class="toolsPane active" id="toolsPaneQuality"><div class='muted'>Ouvrez l'onglet pour lancer l'analyse.</div></div>
+      <div class="toolsPane" id="toolsPaneAnalysis"><div class='muted'>Ouvrez l'onglet pour lancer l'analyse.</div></div>
+    </div>
+  </div>
+</div>
+"""
+
+TOOLS_MODAL_JS = r"""
+(function(){
+  const modal = document.getElementById('toolsModal');
+  const paneQ = document.getElementById('toolsPaneQuality');
+  const paneA = document.getElementById('toolsPaneAnalysis');
+  if(!modal || !paneQ || !paneA) return;
+
+  const esc = (v) => String(v || '').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('\"','&quot;').replaceAll("'",'&#39;');
+
+  function loadQuality(){
+    paneQ.innerHTML = "<div class='muted'>Analyse en cours…</div>";
+    const qs = new URLSearchParams(window.location.search);
+    const meetingId = qs.get('meeting_id') || '';
+    const project = qs.get('project') || '';
+    fetch(`/api/quality?meeting_id=${encodeURIComponent(meetingId)}&project=${encodeURIComponent(project)}`)
+      .then(r => r.json())
+      .then(data => {
+        if(data.error){ paneQ.innerHTML = `<div class='muted'>${esc(data.error)}</div>`; return; }
+        const score = data.score ?? 0;
+        const total = data.total ?? 0;
+        const issuesByArea = data.issues_by_area || {};
+        const issueAreas = Object.keys(issuesByArea);
+        const summary = `
+          <div class="qualityBadge">Score: <span class="qualityScore">${score}</span>/100</div>
+          <div class="qualityGrid">
+            <div class="qualityCard"><div class="meta">Erreurs détectées</div><div style="font-weight:900;font-size:18px">${total}</div></div>
+            <div class="qualityCard"><div class="meta">Impact</div><div style="font-weight:900;font-size:18px">${score >= 90 ? "Faible" : score >= 75 ? "Moyen" : "Fort"}</div></div>
+            <div class="qualityCard"><div class="meta">Relecture</div><div style="font-weight:900;font-size:18px">${score >= 90 ? "OK" : "Recommandée"}</div></div>
+          </div>`;
+        if(!issueAreas.length){ paneQ.innerHTML = summary + "<div class='muted' style='margin-top:10px'>Aucune faute détectée.</div>"; return; }
+        const sections = issueAreas.map(area => {
+          const items = (issuesByArea[area] || []).slice(0,8).map(it => `<li>${esc(it.text || it.context || '')}</li>`).join('');
+          return `<div class="analysisCard"><div style="font-weight:900">Zone : ${esc(area)}</div><ul style="margin:6px 0 0 18px">${items || '<li>—</li>'}</ul></div>`;
+        }).join('');
+        paneQ.innerHTML = summary + `<div style="margin-top:12px;font-weight:900">Points à corriger</div>${sections}`;
+      })
+      .catch(()=>{ paneQ.innerHTML = "<div class='muted'>Impossible d'analyser pour le moment.</div>"; });
+  }
+
+  function loadAnalysis(){
+    paneA.innerHTML = "<div class='muted'>Analyse en cours…</div>";
+    const qs = new URLSearchParams(window.location.search);
+    const meetingId = qs.get('meeting_id') || '';
+    const project = qs.get('project') || '';
+    fetch(`/api/analysis?meeting_id=${encodeURIComponent(meetingId)}&project=${encodeURIComponent(project)}`)
+      .then(r => r.json())
+      .then(data => {
+        if(data.error){ paneA.innerHTML = `<div class='muted'>${esc(data.error)}</div>`; return; }
+        const k = data.kpis || {};
+        const bullets = (data.points || []).map(p => `<li>${esc(p)}</li>`).join('');
+        const risks = (data.risks || []).map(p => `<li>${esc(p)}</li>`).join('');
+        paneA.innerHTML = `
+          <div class="analysisGrid">
+            <div class="analysisKpi"><div class="meta">Rappels en retard</div><div style="font-weight:900;font-size:18px">${k.late_tasks ?? 0}</div></div>
+            <div class="analysisKpi"><div class="meta">Tâches ouvertes</div><div style="font-weight:900;font-size:18px">${k.open_tasks ?? 0}</div></div>
+            <div class="analysisKpi"><div class="meta">À suivre</div><div style="font-weight:900;font-size:18px">${k.followups ?? 0}</div></div>
+          </div>
+          <div class="analysisCard"><div style="font-weight:900">Synthèse rapide</div><ul style="margin:6px 0 0 18px">${bullets || '<li>Aucun point marquant détecté.</li>'}</ul></div>
+          <div class="analysisCard"><div style="font-weight:900">Points de vigilance</div><ul style="margin:6px 0 0 18px">${risks || '<li>Aucun risque majeur identifié.</li>'}</ul></div>`;
+      })
+      .catch(()=>{ paneA.innerHTML = "<div class='muted'>Impossible d'analyser pour le moment.</div>"; });
+  }
+
+  function activate(tab){
+    document.querySelectorAll('.toolsTab').forEach(b => b.classList.toggle('active', b.dataset.toolsTab === tab));
+    paneQ.classList.toggle('active', tab === 'quality');
+    paneA.classList.toggle('active', tab === 'analysis');
+    if(tab === 'quality' && !paneQ.dataset.loaded){ paneQ.dataset.loaded = '1'; loadQuality(); }
+    if(tab === 'analysis' && !paneA.dataset.loaded){ paneA.dataset.loaded = '1'; loadAnalysis(); }
+  }
+
+  function open(){ modal.style.display = 'flex'; activate('quality'); }
+  function close(){ modal.style.display = 'none'; }
+
+  document.getElementById('btnTools')?.addEventListener('click', open);
+  document.getElementById('toolsModalClose')?.addEventListener('click', close);
+  modal.addEventListener('click', (e)=>{ if(e.target===modal) close(); });
+  document.querySelectorAll('.toolsTab').forEach(btn => btn.addEventListener('click', ()=> activate(btn.dataset.toolsTab || 'quality')));
+})();
+"""
+
 RESIZE_TOP_JS = r"""
 (function(){
   const root = document.documentElement;
@@ -2359,7 +2472,9 @@ ROW_CONTROL_JS = r"""
 
   function refreshHiddenSelect(){
     const sel = document.getElementById('hiddenRowsSelect');
+    const tools = document.getElementById('hiddenRowsTools');
     if(!sel) return;
+    if(tools){ tools.style.display = hiddenSet.size ? 'flex' : 'none'; }
     const current = sel.value || "";
     sel.innerHTML = '<option value="">Lignes masquées…</option>';
     Array.from(hiddenSet).sort().forEach(id => {
@@ -2411,6 +2526,7 @@ ROW_CONTROL_JS = r"""
 
   syncSessionHeaders();
   syncZoneVisibility();
+  refreshHiddenSelect();
 })();
 """
 
@@ -3736,18 +3852,19 @@ def render_cr(
     actions_html = f"""
       <div class="actions noPrint">
         <button class="btn" type="button" onclick="window.print()">Imprimer / PDF</button>
+        <button class="btn secondary editCompact" id="btnPrintPreview" type="button">Aperçu impression : OFF</button>
         <button class="btn secondary editCompact" type="button" onclick="window.refreshPagination && window.refreshPagination()">Recalculer la mise en page</button>
-        <button class="btn secondary editCompact" id="btnQualityCheck" type="button">Qualité du texte</button>
-        <button class="btn secondary editCompact" id="btnAnalysis" type="button">Analyse</button>
+        <button class="btn secondary editCompact" id="btnTools" type="button">Outils</button>
         <button class="btn secondary editCompact" id="btnRange" type="button" onclick="toggleRangePanel()">Choisir une période</button>
         <button class="btn secondary editCompact" id="btnConstraints" type="button">Contraintes HTML / impression</button>
-        <button class="btn secondary editCompact" id="btnPrintPreview" type="button">Aperçu impression : OFF</button>
         <button class="btn secondary editCompact" id="btnZoneOrder" type="button">Réordonner les périmètres</button>
-        <select id="hiddenRowsSelect" class="hiddenRowsSelect" title="Lignes masquées">
-          <option value="">Lignes masquées…</option>
-        </select>
-        <button class="btn secondary editCompact" type="button" onclick="restoreSelectedRow()">Réafficher la ligne</button>
-        <button class="btn secondary editCompact" type="button" onclick="restoreAllHiddenRows()">Réafficher tout</button>
+        <div id="hiddenRowsTools" style="display:none;gap:8px;flex-direction:column;">
+          <select id="hiddenRowsSelect" class="hiddenRowsSelect" title="Lignes masquées">
+            <option value="">Lignes masquées…</option>
+          </select>
+          <button class="btn secondary editCompact" type="button" onclick="restoreSelectedRow()">Réafficher la ligne</button>
+          <button class="btn secondary editCompact" type="button" onclick="restoreAllHiddenRows()">Réafficher tout</button>
+        </div>
         <a class="btn secondary" href="/">Changer de réunion</a>
       </div>
       <div class="rangePanel noPrint" id="rangePanel" style="display:{'flex' if range_active else 'none'}">
@@ -3882,7 +3999,7 @@ def render_cr(
             done = _fmt_date(_parse_date_any(r.get(E_COL_COMPLETED_END)))
 
         is_task = _bool_true(r.get(E_COL_IS_TASK))
-        deadline_display = deadline or "—" if is_task else "/"
+        deadline_display = (deadline or "—") if is_task else "PM"
         done_display = done or "—" if is_task else "/"
         lot_display = _lot_abbrev_list(packages) or "—"
         if not is_task and _has_multiple_companies(company):
@@ -4239,8 +4356,8 @@ body.printPreviewMode .noPrintRow{{display:none!important}}
 }}
 .zoneTitle{{
   display:flex;align-items:center;gap:10px;
-  padding:6px 10px;border:1px solid var(--border);border-bottom:none;
-  background:#f59e0b;color:#ffffff;font-weight:900;font-size:11px;text-transform:uppercase;
+  padding:4px 8px;border:1px solid var(--border);border-bottom:none;
+  background:#f59e0b;color:#ffffff;font-weight:900;font-size:10px;text-transform:uppercase;
 }}
 .zoneTitle button{{margin-left:auto}}
 .zoneTools{{display:flex;align-items:center;gap:6px;margin-left:auto}}
@@ -4450,6 +4567,7 @@ body.constraint-off-topScale .topPage{{transform:none!important}}
 {EDITOR_MEMO_MODAL_CSS}
 {QUALITY_MODAL_CSS}
 {ANALYSIS_MODAL_CSS}
+{TOOLS_MODAL_CSS}
 """
 
     # Banner / cover HTML
@@ -4635,9 +4753,11 @@ body.constraint-off-topScale .topPage{{transform:none!important}}
 {EDITOR_MEMO_MODAL_HTML}
 {QUALITY_MODAL_HTML}
 {ANALYSIS_MODAL_HTML}
+{TOOLS_MODAL_HTML}
 <script>{EDITOR_MEMO_MODAL_JS}</script>
 <script>{QUALITY_MODAL_JS}</script>
 <script>{ANALYSIS_MODAL_JS}</script>
+<script>{TOOLS_MODAL_JS}</script>
 <script>{SYNC_EDITABLE_JS}</script>
 <script>{RANGE_PICKER_JS}</script>
 <script>{PRINT_PREVIEW_TOGGLE_JS}</script>
