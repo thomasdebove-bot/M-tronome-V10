@@ -1888,17 +1888,6 @@ LAYOUT_CONTROLS_JS = r"""
   }
 
   document.addEventListener('click', (e) => {
-    const zoneBtn = e.target.closest('.zoneBtn');
-    if(zoneBtn){
-      const action = zoneBtn.dataset.action || '';
-      const zone = closestZone(zoneBtn);
-      if(!zone) return;
-      if(action === 'highlight'){
-        zone.classList.toggle('highlight');
-      }
-      return;
-    }
-
     if(e.target.closest('#btnZoneOrder')){
       openZoneOrderModal();
       return;
@@ -3915,8 +3904,7 @@ def render_cr(
           <div class="zoneTitle">
             <span>{zt}</span>
             <div class="zoneTools noPrint">
-              <button class="zoneBtn" type="button" data-action="highlight">Surligner</button>
-                                                        <button class="btnAddMemo" type="button" data-area="{zt}">+ Ajouter mémo</button>
+              <button class="btnAddMemo" type="button" data-area="{zt}">+ Ajouter mémo</button>
             </div>
           </div>
           <table class="crTable">
@@ -4195,13 +4183,10 @@ body.printPreviewMode .noPrintRow{{display:none!important}}
 }}
 .zoneTitle{{
   display:flex;align-items:center;gap:10px;
-  padding:6px 10px;border:1px solid var(--border);border-bottom:none;
-  background:#f59e0b;color:#ffffff;font-weight:900;font-size:11px;text-transform:uppercase;
+  padding:3px 8px;border:1px solid var(--border);border-bottom:none;
+  background:#f59e0b;color:#ffffff;font-weight:900;font-size:10px;text-transform:uppercase;
 }}
-.zoneTitle button{{margin-left:auto}}
 .zoneTools{{display:flex;align-items:center;gap:6px;margin-left:auto}}
-.zoneBtn{{border:1px solid #ffffff;background:#fff;border-radius:8px;padding:4px 8px;font-weight:800;cursor:pointer}}
-.zoneBlock.highlight{{box-shadow:0 0 0 2px #f59e0b inset; background:linear-gradient(180deg,#fff7ed,#fff)}}
 .zoneBlock.pageBreakBefore{{page-break-before:always}}
 .u-page-break{{break-before:page;page-break-before:always;}}
 .u-avoid-break{{break-inside:avoid;page-break-inside:avoid;}}
