@@ -2283,6 +2283,36 @@ PAGINATION_JS = r"""
     });
   }
 
+  function mergeAdjacentZoneChunksOnSamePage(container){
+    const reportBlocks = Array.from(container.querySelectorAll('.page--report .reportBlocks'));
+    reportBlocks.forEach(blocks => {
+      let prevZone = null;
+      Array.from(blocks.children).forEach(node => {
+        if(!(node instanceof Element)) return;
+        if(!node.classList.contains('zoneBlock')){
+          prevZone = null;
+          return;
+        }
+        if(!prevZone){
+          prevZone = node;
+          return;
+        }
+        const prevKey = prevZone.getAttribute('data-zone-id') || '';
+        const curKey = node.getAttribute('data-zone-id') || '';
+        if(prevKey && curKey && prevKey === curKey){
+          const prevBody = prevZone.querySelector('tbody');
+          const body = node.querySelector('tbody');
+          if(prevBody && body){
+            Array.from(body.children).forEach(row => prevBody.appendChild(row));
+          }
+          node.remove();
+          return;
+        }
+        prevZone = node;
+      });
+    });
+  }
+
   function getZoneSplitData(zone){
     const title = zone.querySelector('.zoneTitle');
     const table = zone.querySelector('table.crTable');
@@ -2411,6 +2441,7 @@ PAGINATION_JS = r"""
       used += actualHeight;
     });
 
+    mergeAdjacentZoneChunksOnSamePage(container);
     updatePageNumbers();
   }
 
