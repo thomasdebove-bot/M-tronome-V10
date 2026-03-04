@@ -1800,33 +1800,163 @@ CONSTRAINT_TOGGLES_JS = r"""
 LAYOUT_CONTROLS_JS = r"""
 (function(){
   function closestZone(el){ return el.closest('.zoneBlock'); }
-  function move(zone, dir){
-    if(!zone) return;
-    if(dir === 'up'){
-      const prev = zone.previousElementSibling;
-      if(prev && prev.classList.contains('zoneBlock')){
-        zone.parentNode.insertBefore(zone, prev);
-      }
-    }else if(dir === 'down'){
-      const next = zone.nextElementSibling;
-      if(next && next.classList.contains('zoneBlock')){
-        zone.parentNode.insertBefore(next, zone);
-      }
+
+  function mergeDuplicateZones(){
+    const zones = Array.from(document.querySelectorAll('.reportPages .zoneBlock'));
+    const grouped = new Map();
+    zones.forEach(zone => {
+      const key = (zone.getAttribute('data-zone-id') || '').trim();
+      if(!key) return;
+      if(!grouped.has(key)){ grouped.set(key, []); }
+      grouped.get(key).push(zone);
+    });
+    grouped.forEach(group => {
+      if(group.length < 2) return;
+      const target = group[0];
+      const targetBody = target.querySelector('tbody');
+      if(!targetBody) return;
+      group.slice(1).forEach(zone => {
+        const body = zone.querySelector('tbody');
+        if(body){
+          Array.from(body.children).forEach(row => targetBody.appendChild(row));
+        }
+        zone.remove();
+      });
+    });
+  }
+
+  function getUniqueZoneBlocks(){
+    mergeDuplicateZones();
+    const seen = new Set();
+    const out = [];
+    Array.from(document.querySelectorAll('.reportPages .zoneBlock')).forEach(zone => {
+      const key = (zone.getAttribute('data-zone-id') || '').trim();
+      if(!key || seen.has(key)) return;
+      const hasRows = !!zone.querySelector('tbody tr');
+      if(!hasRows) return;
+      seen.add(key);
+      out.push(zone);
+    });
+    return out;
+  }
+
+  function openZoneOrderModal(){
+    const modal = document.getElementById('zoneOrderModal');
+    const list = document.getElementById('zoneOrderList');
+    if(!modal || !list) return;
+    const zones = getUniqueZoneBlocks();
+    list.innerHTML = zones.map((zone, idx) => {
+      const zoneId = (zone.getAttribute('data-zone-id') || '').trim();
+      const title = zone.querySelector('.zoneTitle span');
+      const name = (title ? title.textContent : zoneId || `Périmètre ${idx+1}`) || `Périmètre ${idx+1}`;
+      return `<li class="zoneOrderItem" draggable="true" data-zone-id="${zoneId}"><span class="zoneOrderGrip">⋮⋮</span><span class="zoneOrderText">${name}</span></li>`;
+    }).join('');
+    if(!zones.length){
+      list.innerHTML = '<li class="zoneOrderItem" draggable="false"><span class="zoneOrderText">Aucun périmètre à réordonner.</span></li>';
     }
+
+    let dragItem = null;
+    list.querySelectorAll('.zoneOrderItem[draggable="true"]').forEach(item => {
+      item.addEventListener('dragstart', () => {
+        dragItem = item;
+        item.classList.add('dragging');
+      });
+      item.addEventListener('dragend', () => {
+        item.classList.remove('dragging');
+        dragItem = null;
+      });
+      item.addEventListener('dragover', (ev) => {
+        ev.preventDefault();
+        if(!dragItem || dragItem === item) return;
+        const rect = item.getBoundingClientRect();
+        const before = (ev.clientY - rect.top) < (rect.height / 2);
+        if(before){
+          item.parentNode.insertBefore(dragItem, item);
+        }else{
+          item.parentNode.insertBefore(dragItem, item.nextSibling);
+        }
+      });
+    });
+
+    modal.style.display = 'flex';
+    modal.setAttribute('aria-hidden', 'false');
+  }
+
+  function closeZoneOrderModal(){
+    const modal = document.getElementById('zoneOrderModal');
+    if(!modal) return;
+    modal.style.display = 'none';
+    modal.setAttribute('aria-hidden', 'true');
+  }
+
+  function applyZoneOrder(){
+    const list = document.getElementById('zoneOrderList');
+    if(!list) return;
+    const zones = getUniqueZoneBlocks();
+    if(!zones.length) return closeZoneOrderModal();
+
+    const firstPageBlocks = document.querySelector('.reportPages .page--report .reportBlocks');
+    if(!firstPageBlocks) return closeZoneOrderModal();
+
+    const anchor = Array.from(firstPageBlocks.querySelectorAll('.reportBlock')).find(b => !b.classList.contains('zoneBlock')) || null;
+    const byId = new Map();
+    zones.forEach(zone => byId.set((zone.getAttribute('data-zone-id') || '').trim(), zone));
+
+    const orderedIds = Array.from(list.querySelectorAll('.zoneOrderItem[draggable="true"]'))
+      .map(el => (el.getAttribute('data-zone-id') || '').trim())
+      .filter(Boolean);
+
+    const seen = new Set();
+    orderedIds.forEach(id => {
+      if(seen.has(id) || !byId.has(id)) return;
+      seen.add(id);
+      const zone = byId.get(id);
+      if(anchor){
+        firstPageBlocks.insertBefore(zone, anchor);
+      }else{
+        firstPageBlocks.appendChild(zone);
+      }
+    });
+
+    byId.forEach((zone, id) => {
+      if(seen.has(id)) return;
+      if(anchor){
+        firstPageBlocks.insertBefore(zone, anchor);
+      }else{
+        firstPageBlocks.appendChild(zone);
+      }
+    });
+
+    closeZoneOrderModal();
     if(window.repaginateReport){ window.repaginateReport(); }
   }
+
   document.addEventListener('click', (e) => {
     const btn = e.target.closest('.zoneBtn');
-    if(!btn) return;
-    const action = btn.dataset.action || '';
-    const zone = closestZone(btn);
-    if(!zone) return;
-    if(action === 'highlight'){
-      zone.classList.toggle('highlight');
-    }else if(action === 'move-up'){
-      move(zone, 'up');
-    }else if(action === 'move-down'){
-      move(zone, 'down');
+    if(btn){
+      const action = btn.dataset.action || '';
+      const zone = closestZone(btn);
+      if(!zone) return;
+      if(action === 'highlight'){
+        zone.classList.toggle('highlight');
+      }
+      return;
+    }
+
+    if(e.target.closest('#btnZoneOrder')){
+      openZoneOrderModal();
+      return;
+    }
+    if(e.target.closest('#btnZoneOrderClose') || e.target.closest('#btnZoneOrderCancel')){
+      closeZoneOrderModal();
+      return;
+    }
+    if(e.target.closest('#btnZoneOrderApply')){
+      applyZoneOrder();
+      return;
+    }
+    if(e.target.classList && e.target.classList.contains('zoneOrderModal')){
+      closeZoneOrderModal();
     }
   });
 })();
@@ -3612,6 +3742,7 @@ def render_cr(
         <button class="btn secondary editCompact" id="btnRange" type="button" onclick="toggleRangePanel()">Choisir une période</button>
         <button class="btn secondary editCompact" id="btnConstraints" type="button">Contraintes HTML / impression</button>
         <button class="btn secondary editCompact" id="btnPrintPreview" type="button">Aperçu impression : OFF</button>
+        <button class="btn secondary editCompact" id="btnZoneOrder" type="button">Réordonner les périmètres</button>
         <select id="hiddenRowsSelect" class="hiddenRowsSelect" title="Lignes masquées">
           <option value="">Lignes masquées…</option>
         </select>
@@ -3658,6 +3789,24 @@ def render_cr(
           <label><input type="checkbox" data-constraint="keepSessionHeaderWithNext" checked /> Ne pas laisser « En séance du » seul en bas de page</label>
           <label><input type="checkbox" data-constraint="printAutoOptimize" checked /> Optimisation auto avant impression</label>
           <label><input type="checkbox" data-constraint="topScale" checked /> Mise à l'échelle du bandeau haut</label>
+        </div>
+      </div>
+      <div class="zoneOrderModal noPrint" id="zoneOrderModal" style="display:none" aria-hidden="true">
+        <div class="zoneOrderCard" role="dialog" aria-modal="true" aria-labelledby="zoneOrderTitle">
+          <div class="zoneOrderHead">
+            <div>
+              <div class="panelTitle" id="zoneOrderTitle">Réordonner les périmètres</div>
+              <div class="muted small">Glissez-déposez les périmètres présents dans le compte-rendu pour modifier leur ordre.</div>
+            </div>
+            <button class="btn secondary" type="button" id="btnZoneOrderClose">Fermer</button>
+          </div>
+          <div class="zoneOrderListWrap">
+            <ol class="zoneOrderList" id="zoneOrderList"></ol>
+          </div>
+          <div class="zoneOrderActions">
+            <button class="btn secondary" type="button" id="btnZoneOrderCancel">Annuler</button>
+            <button class="btn" type="button" id="btnZoneOrderApply">Appliquer l'ordre</button>
+          </div>
         </div>
       </div>
     """
@@ -3810,8 +3959,6 @@ def render_cr(
           <div class="zoneTitle">
             <span>{zt}</span>
             <div class="zoneTools noPrint">
-              <button class="zoneBtn" type="button" data-action="move-up">↑</button>
-              <button class="zoneBtn" type="button" data-action="move-down">↓</button>
               <button class="zoneBtn" type="button" data-action="highlight">Surligner</button>
                                                         <button class="btnAddMemo" type="button" data-area="{zt}">+ Ajouter mémo</button>
             </div>
@@ -4151,6 +4298,16 @@ body.printPreviewMode .noPrintRow{{display:none!important}}
 .rangeField input{{padding:8px 10px;border-radius:10px;border:1px solid var(--border);font-weight:700}}
 .rangeActions{{display:flex;gap:10px;flex-wrap:wrap}}
 .hiddenRowsSelect{{padding:9px 10px;border:1px solid var(--border);border-radius:10px;font-weight:700;background:#fff;min-width:220px}}
+.zoneOrderModal{{position:fixed;inset:0;z-index:10020;background:rgba(2,6,23,.45);display:none;align-items:center;justify-content:center;padding:20px}}
+.zoneOrderCard{{width:min(760px,96vw);max-height:90vh;display:flex;flex-direction:column;gap:12px;border:1px solid var(--border);border-radius:16px;background:#fff;padding:14px;box-shadow:0 24px 50px rgba(2,6,23,.35)}}
+.zoneOrderHead{{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}}
+.zoneOrderListWrap{{overflow:auto;border:1px solid var(--border);border-radius:12px;padding:10px;background:#f8fafc}}
+.zoneOrderList{{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:8px}}
+.zoneOrderItem{{display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid #dbe3ef;border-radius:10px;background:#fff;font-weight:800;cursor:grab}}
+.zoneOrderItem.dragging{{opacity:.5}}
+.zoneOrderGrip{{color:#64748b;font-size:15px;line-height:1}}
+.zoneOrderText{{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
+.zoneOrderActions{{display:flex;justify-content:flex-end;gap:10px;flex-wrap:wrap}}
 @media print{{.actions{{margin:8px 0}} .btn{{padding:8px 10px;font-size:12px}}}}
 
 /* Bleu = sujets réunion */
