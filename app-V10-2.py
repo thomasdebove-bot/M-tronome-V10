@@ -2564,7 +2564,14 @@ def render_home(project: Optional[str] = None, print_mode: bool = False) -> str:
     m[M_COL_PROJECT_TITLE] = m[M_COL_PROJECT_TITLE].fillna("").astype(str).str.strip()
     m = m.loc[m[M_COL_PROJECT_TITLE] != ""].copy()
 
-    projects = sorted(m[M_COL_PROJECT_TITLE].unique().tolist(), key=lambda x: x.lower())
+    projects = set(m[M_COL_PROJECT_TITLE].unique().tolist())
+
+    # Inclut aussi les projets avec des tâches hors réunion (Meeting/ID vide)
+    e = get_entries().copy()
+    e_project = _series(e, E_COL_PROJECT_TITLE, "").fillna("").astype(str).str.strip()
+    e_meeting = _series(e, E_COL_MEETING_ID, "").fillna("").astype(str).str.strip()
+    projects.update(e_project.loc[(e_project != "") & (e_meeting == "")].unique().tolist())
+    projects = sorted(projects, key=lambda x: x.lower())
     if project:
         m = m.loc[m[M_COL_PROJECT_TITLE] == project].copy()
 
