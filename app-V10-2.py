@@ -844,7 +844,8 @@ def build_company_email_html(
     company: dict,
     items: list[dict],
     meeting_date: date,
-    app_url: str = "https://app.atelier-tempo.fr"
+    app_url: str = "https://app.atelier-tempo.fr",
+    show_created_date: bool = True,
 ) -> tuple[str, str]:
     """
     returns (subject, html)
@@ -931,15 +932,17 @@ def build_company_email_html(
 
         html_parts.append(f'<p><b><u>{escape(str(area))}</u></b></p>')
 
-        header = (
-            '<thead><tr style="background:#efefef;">'
-            '<th style="border:1px solid #999;padding:6px;text-align:left;">Sujet</th>'
-            '<th style="border:1px solid #999;padding:6px;text-align:center;">Écrit le</th>'
-            '<th style="border:1px solid #999;padding:6px;text-align:center;">Pour le</th>'
-            '<th style="border:1px solid #999;padding:6px;text-align:center;">Fait le</th>'
-            '<th style="border:1px solid #999;padding:6px;text-align:center;">Concerne</th>'
-            '</tr></thead>'
-        )
+        header_cells = [
+            '<th style="border:1px solid #999;padding:6px;text-align:left;">Sujet</th>',
+        ]
+        if show_created_date:
+            header_cells.append('<th style="border:1px solid #999;padding:6px;text-align:center;">Écrit le</th>')
+        header_cells.extend([
+            '<th style="border:1px solid #999;padding:6px;text-align:center;">Pour le</th>',
+            '<th style="border:1px solid #999;padding:6px;text-align:center;">Fait le</th>',
+            '<th style="border:1px solid #999;padding:6px;text-align:center;">Concerne</th>',
+        ])
+        header = '<thead><tr style="background:#efefef;">' + ''.join(header_cells) + '</tr></thead>'
 
         rows_html: List[str] = []
         for it in rows:
@@ -947,23 +950,35 @@ def build_company_email_html(
             ecrit_le = _fmt_mail_date(it.get("created_date"))
             pour_le = "PM" if str(it.get("type") or "") == "memo" else _fmt_mail_date(it.get("due_date"))
             is_reminder = str(it.get("type") or "") == "reminder"
+            due_date = it.get("due_date")
             if is_reminder:
                 rl = int(it.get("reminder_level") or 1)
                 fait_le = f'<span style="color:#b91c1c;font-weight:700">RAPPEL {rl}</span>'
-                raw_cols = {3}
             else:
                 fait_le = str(it.get("done_label") or "").strip() or ("/" if str(it.get("type") or "") == "memo" else "")
-                raw_cols = set()
+
+            if str(it.get("type") or "") == "open" and isinstance(due_date, date):
+                delta = (due_date - meeting_date).days
+                if 0 <= delta <= 10:
+                    fait_le = f'<span style="color:#15803d;font-weight:700">J-{delta}</span>'
+
+            raw_cols = set()
             concerne = ", ".join([str(x).strip() for x in (it.get("concerne") or []) if str(x).strip()]) or company_name
-            row_html = tr([sujet, ecrit_le, pour_le, fait_le, concerne], raw_indices=raw_cols)
+            row_vals = [sujet]
+            if show_created_date:
+                row_vals.append(ecrit_le)
+            row_vals.extend([pour_le, fait_le, concerne])
+            if fait_le.startswith("<span"):
+                raw_cols.add(3 if show_created_date else 2)
+            row_html = tr(row_vals, raw_indices=raw_cols)
             rows_html.append(row_html)
 
         colgroup = (
             '<col style="width:64%;" />'
-            '<col style="width:9%;" />'
-            '<col style="width:9%;" />'
-            '<col style="width:9%;" />'
-            '<col style="width:9%;" />'
+            + ('<col style="width:9%;" />' if show_created_date else '')
+            + '<col style="width:9%;" />'
+            + '<col style="width:9%;" />'
+            + '<col style="width:9%;" />'
         )
         table_html = '<table style="width:100%;table-layout:fixed;border-collapse:collapse;border:1px solid #999;">' + colgroup + header + '<tbody>' + ''.join(rows_html) + '</tbody></table>'
         html_parts.append(table_html)
@@ -2564,7 +2579,14 @@ def render_home(project: Optional[str] = None, print_mode: bool = False) -> str:
     m[M_COL_PROJECT_TITLE] = m[M_COL_PROJECT_TITLE].fillna("").astype(str).str.strip()
     m = m.loc[m[M_COL_PROJECT_TITLE] != ""].copy()
 
-    projects = sorted(m[M_COL_PROJECT_TITLE].unique().tolist(), key=lambda x: x.lower())
+    projects = set(m[M_COL_PROJECT_TITLE].unique().tolist())
+
+    # Inclut aussi les projets avec des tâches hors réunion (Meeting/ID vide)
+    e = get_entries().copy()
+    e_project = _series(e, E_COL_PROJECT_TITLE, "").fillna("").astype(str).str.strip()
+    e_meeting = _series(e, E_COL_MEETING_ID, "").fillna("").astype(str).str.strip()
+    projects.update(e_project.loc[(e_project != "") & (e_meeting == "")].unique().tolist())
+    projects = sorted(projects, key=lambda x: x.lower())
     if project:
         m = m.loc[m[M_COL_PROJECT_TITLE] == project].copy()
 
@@ -2598,10 +2620,23 @@ function openCR(){
   const projectEl = document.getElementById('project');
   if(!meetingEl){ alert("Champ réunion introuvable"); return; }
   const mid = meetingEl.value || "";
-  if(!mid){ alert("Choisis une réunion."); return; }
+  if(!mid){ alert("Ce projet n'a pas de réunion, compte-rendu indisponible."); return; }
   const p = projectEl ? (projectEl.value || "") : "";
   const url = `/cr?meeting_id=${encodeURIComponent(mid)}&project=${encodeURIComponent(p)}&print=1`;
   window.location.href = url;
+}
+
+
+function syncCrAvailability(){
+  const project = document.getElementById('project')?.value || '';
+  const meeting = document.getElementById('meeting')?.value || '';
+  const btn = document.getElementById('openCrBtn');
+  if(!btn) return;
+  const hasMeeting = !!meeting;
+  btn.disabled = !hasMeeting;
+  btn.style.opacity = hasMeeting ? '1' : '.45';
+  btn.style.cursor = hasMeeting ? 'pointer' : 'not-allowed';
+  btn.title = hasMeeting ? '' : 'Aucune réunion liée à ce projet';
 }
 
 function renderRows(targetId, rows, leftKey, rightKey){
@@ -3291,7 +3326,6 @@ function selectedCompaniesForMail(){
 async function generateCompanyMailDraft(){
   const meeting = document.getElementById('meeting')?.value || '';
   const project = document.getElementById('project')?.value || '';
-  if(!meeting){ alert('Choisis une réunion.'); return; }
   const companies = selectedCompaniesForMail();
   const allCompanies = (document.getElementById('mailAllCompanies')?.checked) ? '1' : '0';
   const pStart = document.getElementById('mailPeriodStart')?.value || '';
@@ -3317,12 +3351,14 @@ async function refreshDashboard(){
   const area = document.getElementById('filterArea')?.value || '';
   const pack = document.getElementById('filterPackage')?.value || '';
   const status = document.getElementById('filterStatus')?.value || 'open';
-  if(!meeting) return;
+  const hasMeeting = !!meeting;
+  if(!hasMeeting && !project) return;
   const url = `/api/home_meeting_dashboard?meeting_id=${encodeURIComponent(meeting)}&project=${encodeURIComponent(project)}&area=${encodeURIComponent(area)}&package=${encodeURIComponent(pack)}&status_filter=${encodeURIComponent(status)}`;
   const res = await fetch(url);
   const data = await res.json();
   if(data.error){ console.error(data.error); return; }
   window.__homeDashboardData = data;
+  syncCrAvailability();
 
   document.getElementById('kpiRem').textContent = data.kpis?.open_reminders ?? 0;
   document.getElementById('kpiFol').textContent = data.kpis?.open_followups ?? 0;
@@ -3369,6 +3405,7 @@ window.addEventListener('DOMContentLoaded', () => {
   if(incRem) incRem.addEventListener('change', generateCompanyMailDraft);
   if(incClosed) incClosed.addEventListener('change', generateCompanyMailDraft);
   if(incWithoutCreated) incWithoutCreated.addEventListener('change', generateCompanyMailDraft);
+  syncCrAvailability();
   refreshDashboard();
 });
 """
@@ -3546,14 +3583,14 @@ body.drawerOpen{{overflow:hidden}}
         </div>
         <div>
           <label>Réunion</label>
-          <select id="meeting" onchange="refreshDashboard()">
-            {meeting_opts if meeting_opts else '<option value="">— Sélectionne un projet —</option>'}
+          <select id="meeting" onchange="syncCrAvailability();refreshDashboard()">
+            {meeting_opts if meeting_opts else '<option value="">— Aucune réunion pour ce projet —</option>'}
           </select>
         </div>
       </div>
 
       <div style="display:flex;gap:10px;margin-top:14px;flex-wrap:wrap">
-        <button class="btn" type="button" onclick="openCR()">Ouvrir le compte-rendu</button><button class="btn secondary" type="button" onclick="openCompanyMailModal()">Préparer mail entreprises</button>
+        <button class="btn" id="openCrBtn" type="button" onclick="openCR()">Ouvrir le compte-rendu</button><button class="btn secondary" type="button" onclick="openCompanyMailModal()">Préparer mail entreprises</button>
       </div>
     </div>
 
@@ -5120,26 +5157,29 @@ def _build_ai_summary_by_area(df: pd.DataFrame, ref_date: date) -> Dict[str, Dic
 
 @app.get("/api/home_meeting_dashboard", response_class=JSONResponse)
 def api_home_meeting_dashboard(
-    meeting_id: str = Query(...),
+    meeting_id: str = Query(default=""),
     project: str = Query(default=""),
     area: str = Query(default=""),
     package: str = Query(default=""),
     status_filter: str = Query(default="open"),
 ):
     try:
-        mrow = meeting_row(meeting_id)
-        project = (project or str(mrow.get(M_COL_PROJECT_TITLE, ""))).strip()
-        meeting_date = _parse_date_any(mrow.get(M_COL_DATE)) or date.today()
+        mrow = None
+        if str(meeting_id or "").strip():
+            mrow = meeting_row(meeting_id)
+            project = (project or str(mrow.get(M_COL_PROJECT_TITLE, ""))).strip()
+            meeting_date = _parse_date_any(mrow.get(M_COL_DATE)) or date.today()
+        else:
+            project = (project or "").strip()
+            meeting_date = date.today()
         ref_date = date.today()
 
-        rem_df = reminders_for_project(project_title=project, ref_date=ref_date, max_level=8)
-        fol_df = followups_for_project(project_title=project, ref_date=ref_date, exclude_entry_ids=set())
-
-        company_counts = reminders_by_company(rem_df)
         company_logo_map = companies_logo_by_name()
 
         entries = get_entries().copy()
         entries = entries.loc[entries[E_COL_PROJECT_TITLE].fillna("").astype(str).str.strip() == project].copy()
+        if not str(meeting_id or "").strip():
+            entries = entries.loc[_series(entries, E_COL_MEETING_ID, "").fillna("").astype(str).str.strip() == ""].copy()
         entries["__is_task__"] = _series(entries, E_COL_IS_TASK, False).apply(_bool_true)
         entries = entries.loc[entries["__is_task__"] == True].copy()
         entries["__deadline__"] = _series(entries, E_COL_DEADLINE, None).apply(_parse_date_any)
@@ -5149,10 +5189,13 @@ def api_home_meeting_dashboard(
 
         if area:
             entries = entries.loc[entries["__area_list__"].astype(str) == area].copy()
-            rem_df = rem_df.loc[rem_df["__area_list__"].astype(str) == area].copy() if not rem_df.empty else rem_df
-            fol_df = fol_df.loc[fol_df["__area_list__"].astype(str) == area].copy() if not fol_df.empty else fol_df
         if package:
             entries = entries.loc[entries["__package_list__"].astype(str) == package].copy()
+
+        rem_source = entries.copy()
+        rem_source["__completed__"] = _series(rem_source, E_COL_COMPLETED, False).apply(_bool_true)
+        rem_df = rem_source.loc[(rem_source["__completed__"] == False) & (rem_source["__deadline__"].notna()) & (rem_source["__deadline__"] < ref_date)].copy()
+        fol_df = rem_source.loc[(rem_source["__completed__"] == False) & (rem_source["__deadline__"].notna()) & (rem_source["__deadline__"] >= ref_date)].copy()
 
         # Rappels entreprises recalculés sur le périmètre/filtre courant
         company_counts = reminders_by_company(rem_df)
@@ -5222,7 +5265,7 @@ def api_home_meeting_dashboard(
                     "task_id": str(r.get(E_COL_ID, "") or "").strip(),
                     "comment": str(r.get(E_COL_TASK_COMMENT_TEXT, "") or "").strip(),
                     "meeting_id": str(r.get(E_COL_MEETING_ID, "") or "").strip(),
-                    "meeting_linked": str(r.get(E_COL_MEETING_ID, "") or "").strip() == str(meeting_id),
+                    "meeting_linked": bool(str(meeting_id or "").strip()) and (str(r.get(E_COL_MEETING_ID, "") or "").strip() == str(meeting_id)),
                     "completed": bool(r.get("__completed__", False)),
                     "status": status,
                 })
@@ -5421,7 +5464,7 @@ def api_meeting_package_email(
 
 @app.get("/api/meeting_company_mail_draft", response_class=JSONResponse)
 def api_meeting_company_mail_draft(
-    meeting_id: str = Query(...),
+    meeting_id: str = Query(default=""),
     project: str = Query(default=""),
     companies: str = Query(default=""),
     selected_companies: str = Query(default=""),
@@ -5435,21 +5478,34 @@ def api_meeting_company_mail_draft(
     include_without_created: bool = Query(default=True),
 ):
     try:
-        mrow = meeting_row(meeting_id)
-        project = (project or str(mrow.get(M_COL_PROJECT_TITLE, ""))).strip()
-        meeting_date = _parse_date_any(mrow.get(M_COL_DATE)) or date.today()
+        mrow = None
+        if str(meeting_id or "").strip():
+            mrow = meeting_row(meeting_id)
+            project = (project or str(mrow.get(M_COL_PROJECT_TITLE, ""))).strip()
+            meeting_date = _parse_date_any(mrow.get(M_COL_DATE)) or date.today()
+        else:
+            project = (project or "").strip()
+            meeting_date = date.today()
         p_start = _parse_date_any(period_start) if str(period_start or "").strip() else None
         p_end = _parse_date_any(period_end) if str(period_end or "").strip() else None
         if p_start and p_end and p_start > p_end:
             p_start, p_end = p_end, p_start
 
-        meeting_df = entries_for_meeting(meeting_id).copy()
-        if project:
-            meeting_df = meeting_df.loc[_series(meeting_df, E_COL_PROJECT_TITLE, "").fillna("").astype(str).str.strip() == project].copy()
+        if str(meeting_id or "").strip():
+            meeting_df = entries_for_meeting(meeting_id).copy()
+            if project:
+                meeting_df = meeting_df.loc[_series(meeting_df, E_COL_PROJECT_TITLE, "").fillna("").astype(str).str.strip() == project].copy()
+        else:
+            meeting_df = get_entries().copy()
+            if project:
+                meeting_df = meeting_df.loc[_series(meeting_df, E_COL_PROJECT_TITLE, "").fillna("").astype(str).str.strip() == project].copy()
+            meeting_df = meeting_df.loc[_series(meeting_df, E_COL_MEETING_ID, "").fillna("").astype(str).str.strip() == ""].copy()
 
         all_project_df = get_entries().copy()
         if project:
             all_project_df = all_project_df.loc[_series(all_project_df, E_COL_PROJECT_TITLE, "").fillna("").astype(str).str.strip() == project].copy()
+        if not str(meeting_id or "").strip():
+            all_project_df = all_project_df.loc[_series(all_project_df, E_COL_MEETING_ID, "").fillna("").astype(str).str.strip() == ""].copy()
         if all_project_df.empty:
             return {"emails_detected": [], "subject": "", "html": "", "text_fallback": "Aucune donnée projet."}
 
@@ -5536,7 +5592,7 @@ def api_meeting_company_mail_draft(
             done_date = r.get("__done_date__")
             rem_lvl = 0
 
-            if (not include_without_created) and (not isinstance(created_date, date)):
+            if str(meeting_id or "").strip() and (not include_without_created) and (not isinstance(created_date, date)):
                 continue
 
             if (not is_task) and not include_memos:
@@ -5561,7 +5617,7 @@ def api_meeting_company_mail_draft(
             # - entrées disponibles à la date de réunion (open/memos)
             # - rappels
             # - sujets "fait-le" dans les 2 semaines avant la réunion
-            if not p_start and not p_end:
+            if str(meeting_id or "").strip() and (not p_start and not p_end):
                 if is_task and is_completed:
                     if not isinstance(done_date, date):
                         continue
@@ -5621,6 +5677,7 @@ def api_meeting_company_mail_draft(
             items=items_all,
             meeting_date=meeting_date,
             app_url="https://app.atelier-tempo.fr",
+            show_created_date=bool(str(meeting_id or "").strip()),
         )
         target_phrase_txt = _target_companies_phrase(len(target_companies))
         text_fallback = (
