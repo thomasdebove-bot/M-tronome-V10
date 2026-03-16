@@ -5,7 +5,8 @@ param(
     [ValidateSet("FastAPI", "Script")]
     [string]$Mode = "FastAPI",
     [string]$AppVarName = "app",
-    [string]$Host = "127.0.0.1",
+    [Alias("Host")]
+    [string]$BindHost = "127.0.0.1",
     [int]$Port = 8090,
     [bool]$OpenBrowser = $true,
     [switch]$OneFile = $true,
@@ -74,7 +75,7 @@ import uvicorn
 
 ENTRY_PATH = pathlib.Path(r"$entryEscaped")
 APP_VAR = "$AppVarName"
-HOST = "$Host"
+HOST = "$BindHost"
 PORT = $Port
 OPEN_BROWSER = $OpenBrowser
 
@@ -133,7 +134,7 @@ uvicorn.run(app, host=HOST, port=PORT, log_level="info")
         Step "Build terminé"
         Write-Host "EXE généré: $exePath" -ForegroundColor Green
         if ($Mode -eq "FastAPI") {
-            Write-Host "Au lancement, l'EXE démarre le serveur sur http://$Host`:$Port" -ForegroundColor Green
+            Write-Host "Au lancement, l'EXE démarre le serveur sur http://$BindHost`:$Port" -ForegroundColor Green
         }
     }
     else {
@@ -143,7 +144,7 @@ uvicorn.run(app, host=HOST, port=PORT, log_level="info")
     Write-Host "`nExemples:" -ForegroundColor Yellow
     Write-Host "  .\build_exe.ps1" -ForegroundColor Yellow
     Write-Host "  .\build_exe.ps1 -Mode Script -EntryScript .\mon_script.py -ExeName MonOutil" -ForegroundColor Yellow
-    Write-Host "  .\build_exe.ps1 -Host 0.0.0.0 -Port 8090 -OpenBrowser:$true" -ForegroundColor Yellow
+    Write-Host "  .\build_exe.ps1 -BindHost 0.0.0.0 -Port 8090 -OpenBrowser:$true" -ForegroundColor Yellow
 }
 catch {
     Fail $_.Exception.Message
