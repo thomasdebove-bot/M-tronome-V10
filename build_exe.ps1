@@ -15,6 +15,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$script:ExitCode = 0
 
 function Step([string]$msg) {
     Write-Host "`n==> $msg" -ForegroundColor Cyan
@@ -148,11 +149,15 @@ catch {
     Fail $_.Exception.Message
     Write-Host "Détail:" -ForegroundColor DarkYellow
     Write-Host $_.Exception.ToString()
-    exit 1
+    $script:ExitCode = 1
 }
 finally {
     if ($PauseOnExit) {
         Write-Host "`nAppuyez sur Entrée pour fermer..." -ForegroundColor DarkGray
         [void](Read-Host)
     }
+}
+
+if ($script:ExitCode -ne 0) {
+    exit $script:ExitCode
 }
