@@ -3974,17 +3974,20 @@ def render_cr(
     def render_presence_rows(items: List[Dict], label: str) -> str:
         if not items:
             return f"<tr><td>{_escape(label)} (0)</td><td class='muted'>—</td><td class='muted'>—</td></tr>"
-        rows = []
-        lots = []
-        for it in items:
+
+        lines = []
+        total = len(items)
+        for idx, it in enumerate(items):
             name_raw = str(it.get("name", "") or "").strip()
             name = _escape(name_raw)
             logo = (it.get("logo", "") or "").strip()
             logo_html = f"<img class='coLogo' src='{_escape(logo)}' alt='' loading='lazy' />" if logo.startswith("http") else ""
-            rows.append(f"<li class='presenceLine'>{logo_html}<span>{name}</span></li>")
-            lot_txt = lot_map.get(_norm_name(name_raw), "—")
-            lots.append(f"<li class='presenceLine'><span>{_escape(lot_txt)}</span></li>")
-        return f"<tr><td>{_escape(label)} ({len(items)})</td><td><ul class='presenceList'>{''.join(rows)}</ul></td><td><ul class='presenceList'>{''.join(lots)}</ul></td></tr>"
+            lot_txt = _escape(lot_map.get(_norm_name(name_raw), "—"))
+            type_cell = f"<td rowspan='{total}'>{_escape(label)} ({total})</td>" if idx == 0 else ""
+            lines.append(
+                f"<tr>{type_cell}<td><div class='presenceLine'>{logo_html}<span>{name}</span></div></td><td><div class='presenceLine'><span>{lot_txt}</span></div></td></tr>"
+            )
+        return ''.join(lines)
 
     presence_html = f"""
       <div class="presenceWrap">
