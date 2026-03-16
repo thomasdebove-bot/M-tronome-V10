@@ -3947,22 +3947,43 @@ def render_cr(
     kpi_table_html = ""
     reminders_kpi_html = ""
 
+    lot_map: Dict[str, str] = {}
+    entries_for_lot = get_entries().copy()
+    entries_for_lot = entries_for_lot.loc[_series(entries_for_lot, E_COL_PROJECT_TITLE, "").fillna("").astype(str).str.strip() == project].copy()
+    if not entries_for_lot.empty:
+        entries_for_lot["__company__"] = _series(entries_for_lot, E_COL_COMPANY_TASK, "").fillna("").astype(str).str.strip()
+        entries_for_lot["__lots__"] = _series(entries_for_lot, E_COL_PACKAGES, "").fillna("").astype(str)
+        grouped_lots: Dict[str, set[str]] = {}
+        for _, rr in entries_for_lot.iterrows():
+            cname = str(rr.get("__company__", "") or "").strip()
+            if not cname:
+                continue
+            key = _norm_name(cname)
+            grouped_lots.setdefault(key, set())
+            for lot in _split_multi_labels(str(rr.get("__lots__", "") or "")):
+                if str(lot).strip():
+                    grouped_lots[key].add(str(lot).strip())
+        lot_map = {k: ", ".join(sorted(v)) for k, v in grouped_lots.items() if v}
+
     def render_presence_rows(items: List[Dict], label: str) -> str:
         if not items:
-            return f"<tr><td>{_escape(label)} (0)</td><td class='muted'>—</td></tr>"
+            return f"<tr><td>{_escape(label)} (0)</td><td class='muted'>—</td><td class='muted'>—</td></tr>"
         rows = []
+        lots = []
         for it in items:
-            name = _escape(it.get("name", ""))
+            name_raw = str(it.get("name", "") or "").strip()
+            name = _escape(name_raw)
             logo = (it.get("logo", "") or "").strip()
             logo_html = f"<img class='coLogo' src='{_escape(logo)}' alt='' loading='lazy' />" if logo.startswith("http") else ""
             rows.append(f"<li class='presenceLine'>{logo_html}<span>{name}</span></li>")
-        return f"<tr><td>{_escape(label)} ({len(items)})</td><td><ul class='presenceList'>{''.join(rows)}</ul></td></tr>"
+            lots.append(f"<li class='presenceLine'><span>{_escape(lot_map.get(_norm_name(name_raw), '—'))}</span></li>")
+        return f"<tr><td>{_escape(label)} ({len(items)})</td><td><ul class='presenceList'>{''.join(rows)}</ul></td><td><ul class='presenceList'>{''.join(lots)}</ul></td></tr>"
 
     presence_html = f"""
       <div class="presenceWrap">
         <table class="annexTable coverTable presenceTable">
           <thead>
-            <tr><th>Type</th><th>Entreprises</th></tr>
+            <tr><th>Type</th><th>Entreprises</th><th>LOT</th></tr>
           </thead>
           <tbody>
             {render_presence_rows(att, "Présentes")}
@@ -4683,6 +4704,7 @@ body.constraint-off-topScale .topPage{{transform:none!important}}
 .reportHeader .accent{{color:#f59e0b;font-weight:900}}
 .presenceTable .presenceList{{margin:0;padding-left:0;list-style:none;display:flex;flex-direction:column;gap:6px}}
 .presenceTable .presenceLine{{display:flex;align-items:center;gap:8px;font-weight:700}}
+.presenceTable th:nth-child(3),.presenceTable td:nth-child(3){{width:260px}}
 .docFooter{{position:absolute;left:0;right:0;bottom:0;height:24mm;display:grid;grid-template-columns:120px 1fr 120px;align-items:center;gap:10px;padding:3mm 10mm;border-top:1px solid #dbe5f0;background:#fff;overflow:hidden;width:100%;box-sizing:border-box}}
 .docFooter::before{{content:"";position:absolute;left:0;bottom:0;width:170px;height:42px;background:#123f45;clip-path:polygon(0 100%,100% 100%,0 0)}}
 .docFooter::after{{content:"";position:absolute;right:0;bottom:0;width:260px;height:70px;background:#123f45;clip-path:polygon(100% 0,100% 100%,0 100%)}}
