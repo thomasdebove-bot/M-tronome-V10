@@ -30,8 +30,19 @@ function Resolve-EntryPath([string]$PathValue) {
     if ([System.IO.Path]::IsPathRooted($PathValue)) {
         return (Resolve-Path $PathValue).Path
     }
-    $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-    $candidate = Join-Path $scriptDir $PathValue
+
+    $scriptDir = $PSScriptRoot
+    if ([string]::IsNullOrWhiteSpace($scriptDir) -and $PSCommandPath) {
+        $scriptDir = Split-Path -Parent $PSCommandPath
+    }
+    if ([string]::IsNullOrWhiteSpace($scriptDir) -and $MyInvocation.MyCommand.Path) {
+        $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+    }
+    if ([string]::IsNullOrWhiteSpace($scriptDir)) {
+        $scriptDir = (Get-Location).Path
+    }
+
+    $candidate = Join-Path -Path $scriptDir -ChildPath $PathValue
     return (Resolve-Path $candidate).Path
 }
 
