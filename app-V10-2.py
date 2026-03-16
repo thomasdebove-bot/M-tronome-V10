@@ -566,7 +566,7 @@ def render_task_comment(r) -> str:
       <div class="topicComment">
         <div class="metaLabel">Commentaire</div>
         <div class="metaVal">{meta or "—"}</div>
-        <div style="margin-top:6px">{body}</div>
+        <div class="commentEditable" style="margin-top:6px">{body}</div>
       </div>
     """
 
@@ -585,7 +585,7 @@ def render_entry_comment(r) -> str:
     return f"""
       <div class="entryComment">
         <div class="metaVal">{meta or "—"}</div>
-        <div style="margin-top:6px">{body}</div>
+        <div class="commentEditable" style="margin-top:6px">{body}</div>
       </div>
     """
 
@@ -1887,6 +1887,7 @@ CONSTRAINT_TOGGLES_JS = r"""
     keepSessionHeaderWithNext: true,
     printAutoOptimize: true,
     topScale: true,
+    allowCommentEdit: false,
   };
 
   function loadState(){
@@ -1905,6 +1906,29 @@ CONSTRAINT_TOGGLES_JS = r"""
 
   function applyConstraint(name, active){
     body.classList.toggle(`constraint-off-${name}`, !active);
+    if(name === 'allowCommentEdit'){ applyCommentEdit(!!active); }
+  }
+
+  function applyCommentEdit(enabled){
+    document.querySelectorAll('.commentEditable').forEach(el => {
+      el.setAttribute('contenteditable', enabled ? 'true' : 'false');
+      el.classList.toggle('editableCell', !!enabled);
+    });
+    body.classList.toggle('commentEditMode', !!enabled);
+  }
+
+  function showCommentEditWarning(){
+    const modal = document.getElementById('commentEditWarnModal');
+    if(!modal) return;
+    modal.style.display = 'flex';
+    modal.setAttribute('aria-hidden', 'false');
+  }
+
+  function hideCommentEditWarning(){
+    const modal = document.getElementById('commentEditWarnModal');
+    if(!modal) return;
+    modal.style.display = 'none';
+    modal.setAttribute('aria-hidden', 'true');
   }
 
   function applyAll(state){
@@ -1919,6 +1943,7 @@ CONSTRAINT_TOGGLES_JS = r"""
     input.addEventListener('change', () => {
       state[name] = !!input.checked;
       applyConstraint(name, state[name]);
+      if(name === 'allowCommentEdit' && state[name]){ showCommentEditWarning(); }
       saveState(state);
       if(window.repaginateReport){ window.repaginateReport(); }
     });
@@ -1946,6 +1971,11 @@ CONSTRAINT_TOGGLES_JS = r"""
 
   document.getElementById('btnConstraints')?.addEventListener('click', () => {
     panel.style.display = panel.style.display === 'none' ? 'flex' : 'none';
+  });
+
+  document.getElementById('commentEditWarnClose')?.addEventListener('click', hideCommentEditWarning);
+  document.getElementById('commentEditWarnModal')?.addEventListener('click', (e) => {
+    if(e.target && e.target.id === 'commentEditWarnModal'){ hideCommentEditWarning(); }
   });
 
   applyAll(state);
@@ -3999,6 +4029,14 @@ def render_cr(
           <label><input type="checkbox" data-constraint="keepSessionHeaderWithNext" checked /> Ne pas laisser « En séance du » seul en bas de page</label>
           <label><input type="checkbox" data-constraint="printAutoOptimize" checked /> Optimisation auto avant impression</label>
           <label><input type="checkbox" data-constraint="topScale" checked /> Mise à l'échelle du bandeau haut</label>
+          <label><input type="checkbox" data-constraint="allowCommentEdit" /> Autoriser édition des commentaires et observations</label>
+        </div>
+      </div>
+      <div class="warnModal noPrint" id="commentEditWarnModal" style="display:none" aria-hidden="true">
+        <div class="warnCard" role="dialog" aria-modal="true" aria-labelledby="commentEditWarnTitle">
+          <div class="panelTitle" id="commentEditWarnTitle">Édition locale activée</div>
+          <div class="muted">Attention, les modifications textuelles ne seront pas mises à jour sur METRONOME.</div>
+          <div class="warnActions"><button class="btn secondary" type="button" id="commentEditWarnClose">Fermer</button></div>
         </div>
       </div>
       <div class="zoneOrderModal noPrint" id="zoneOrderModal" style="display:none" aria-hidden="true">
@@ -4129,7 +4167,7 @@ def render_cr(
             <td class="colType">{toggle_html}<div>{tag_html or "—"}</div></td>
             <td class="colComment">
               <div class="rowImageTools noPrint"><button type="button" class="btnAddImage">+ Image</button><input type="file" class="imageInput" accept="image/*" multiple hidden /></div>
-              <div class="commentText">{title}</div>
+              <div class="commentText commentEditable">{title}</div>
               {thumbs}
               {render_entry_comment(r)}
             </td>
@@ -4515,6 +4553,12 @@ body.printPreviewMode .noPrintRow{{display:none!important}}
 .zoneOrderGrip{{color:#64748b;font-size:15px;line-height:1}}
 .zoneOrderText{{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
 .zoneOrderActions{{display:flex;justify-content:flex-end;gap:10px;flex-wrap:wrap}}
+.warnModal{{position:fixed;inset:0;z-index:10060;background:rgba(2,6,23,.45);display:none;align-items:center;justify-content:center;padding:20px}}
+.warnCard{{width:min(560px,92vw);background:#fff;border:1px solid var(--border);border-radius:14px;padding:14px;box-shadow:0 16px 34px rgba(2,6,23,.22);display:flex;flex-direction:column;gap:10px}}
+.warnActions{{display:flex;justify-content:flex-end;gap:10px}}
+.commentEditable[contenteditable="true"]{{cursor:text}}
+body.commentEditMode .commentEditable{{outline:1px dashed #94a3b8;outline-offset:2px}}
+
 @media print{{.actions{{margin:8px 0}} .btn{{padding:8px 10px;font-size:12px}}}}
 
 /* Bleu = sujets réunion */
