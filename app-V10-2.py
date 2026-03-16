@@ -1888,7 +1888,7 @@ CONSTRAINT_TOGGLES_JS = r"""
     printAutoOptimize: true,
     topScale: true,
     allowCommentEdit: false,
-    allowPresenceCompanyEdit: false,
+    allowPresenceLotEdit: false,
   };
 
   function loadState(){
@@ -1908,15 +1908,15 @@ CONSTRAINT_TOGGLES_JS = r"""
   function applyConstraint(name, active){
     body.classList.toggle(`constraint-off-${name}`, !active);
     if(name === 'allowCommentEdit'){ applyCommentEdit(!!active); }
-    if(name === 'allowPresenceCompanyEdit'){ applyPresenceCompanyEdit(!!active); }
+    if(name === 'allowPresenceLotEdit'){ applyPresenceLotEdit(!!active); }
   }
 
-  function applyPresenceCompanyEdit(enabled){
-    document.querySelectorAll('.presenceCompanyEditable').forEach(el => {
+  function applyPresenceLotEdit(enabled){
+    document.querySelectorAll('.presenceLotEditable').forEach(el => {
       el.setAttribute('contenteditable', enabled ? 'true' : 'false');
       el.classList.toggle('editableCell', !!enabled);
     });
-    body.classList.toggle('presenceCompanyEditMode', !!enabled);
+    body.classList.toggle('presenceLotEditMode', !!enabled);
   }
 
   function applyCommentEdit(enabled){
@@ -3996,7 +3996,7 @@ def render_cr(
             lot_txt = _escape(lot_map.get(_norm_name(name_raw), "—"))
             type_cell = f"<td rowspan='{total}'>{_escape(label)} ({total})</td>" if idx == 0 else ""
             lines.append(
-                f"<tr>{type_cell}<td><div class='presenceLine'>{logo_html}<span class='presenceCompanyEditable'>{name}</span></div></td><td><div class='presenceLine'><span>{lot_txt}</span></div></td></tr>"
+                f"<tr>{type_cell}<td><div class='presenceLine'>{logo_html}<span>{name}</span></div></td><td><div class='presenceLine'><span class='presenceLotEditable'>{lot_txt}</span></div></td></tr>"
             )
         return ''.join(lines)
 
@@ -4072,7 +4072,7 @@ def render_cr(
           <label><input type="checkbox" data-constraint="printAutoOptimize" checked /> Optimisation auto avant impression</label>
           <label><input type="checkbox" data-constraint="topScale" checked /> Mise à l'échelle du bandeau haut</label>
           <label><input type="checkbox" data-constraint="allowCommentEdit" /> Autoriser édition des commentaires et observations</label>
-          <label><input type="checkbox" data-constraint="allowPresenceCompanyEdit" /> Autoriser édition des entreprises (tableau de présence)</label>
+          <label><input type="checkbox" data-constraint="allowPresenceLotEdit" /> Autoriser édition de la colonne LOT (tableau de présence)</label>
         </div>
       </div>
       <div class="warnModal noPrint" id="commentEditWarnModal" style="display:none" aria-hidden="true">
@@ -4601,8 +4601,8 @@ body.printPreviewMode .noPrintRow{{display:none!important}}
 .warnActions{{display:flex;justify-content:flex-end;gap:10px}}
 .commentEditable[contenteditable="true"]{{cursor:text}}
 body.commentEditMode .commentEditable{{outline:1px dashed #94a3b8;outline-offset:2px}}
-.presenceCompanyEditable[contenteditable="true"]{{cursor:text}}
-body.presenceCompanyEditMode .presenceCompanyEditable{{outline:1px dashed #94a3b8;outline-offset:2px}}
+.presenceLotEditable[contenteditable="true"]{{cursor:text}}
+body.presenceLotEditMode .presenceLotEditable{{outline:1px dashed #94a3b8;outline-offset:2px}}
 
 @media print{{.actions{{margin:8px 0}} .btn{{padding:8px 10px;font-size:12px}}}}
 
