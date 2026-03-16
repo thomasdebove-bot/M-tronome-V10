@@ -3953,17 +3953,23 @@ def render_cr(
     if not entries_for_lot.empty:
         entries_for_lot["__company__"] = _series(entries_for_lot, E_COL_COMPANY_TASK, "").fillna("").astype(str).str.strip()
         entries_for_lot["__lots__"] = _series(entries_for_lot, E_COL_PACKAGES, "").fillna("").astype(str)
-        grouped_lots: Dict[str, set[str]] = {}
+        grouped_lots: Dict[str, Dict[str, int]] = {}
         for _, rr in entries_for_lot.iterrows():
             cname = str(rr.get("__company__", "") or "").strip()
             if not cname:
                 continue
             key = _norm_name(cname)
-            grouped_lots.setdefault(key, set())
+            grouped_lots.setdefault(key, {})
             for lot in _split_multi_labels(str(rr.get("__lots__", "") or "")):
-                if str(lot).strip():
-                    grouped_lots[key].add(str(lot).strip())
-        lot_map = {k: ", ".join(sorted(v)) for k, v in grouped_lots.items() if v}
+                lot_txt = str(lot).strip()
+                if not lot_txt:
+                    continue
+                grouped_lots[key][lot_txt] = int(grouped_lots[key].get(lot_txt, 0)) + 1
+        for key, counts in grouped_lots.items():
+            if not counts:
+                continue
+            best_lot = sorted(counts.items(), key=lambda kv: (-int(kv[1]), _norm_name(str(kv[0]))))[0][0]
+            lot_map[key] = str(best_lot).strip()
 
     def render_presence_rows(items: List[Dict], label: str) -> str:
         if not items:
@@ -3976,7 +3982,8 @@ def render_cr(
             logo = (it.get("logo", "") or "").strip()
             logo_html = f"<img class='coLogo' src='{_escape(logo)}' alt='' loading='lazy' />" if logo.startswith("http") else ""
             rows.append(f"<li class='presenceLine'>{logo_html}<span>{name}</span></li>")
-            lots.append(f"<li class='presenceLine'><span>{_escape(lot_map.get(_norm_name(name_raw), '—'))}</span></li>")
+            lot_txt = lot_map.get(_norm_name(name_raw), "—")
+            lots.append(f"<li class='presenceLine'><span>{_escape(name_raw)} - {_escape(lot_txt)}</span></li>")
         return f"<tr><td>{_escape(label)} ({len(items)})</td><td><ul class='presenceList'>{''.join(rows)}</ul></td><td><ul class='presenceList'>{''.join(lots)}</ul></td></tr>"
 
     presence_html = f"""
