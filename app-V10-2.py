@@ -3351,12 +3351,30 @@ function toggleMailCompanyMode(){
   sel.disabled = !!allChk.checked;
 }
 
-function openCompanyMailModal(){
+async function _companiesFromMailApi(){
+  const meeting = document.getElementById('meeting')?.value || '';
+  const project = document.getElementById('project')?.value || '';
+  if(!project && !meeting) return [];
+  const url = `/api/meeting_company_mail_draft?meeting_id=${encodeURIComponent(meeting)}&project=${encodeURIComponent(project)}&all_companies=1`;
+  try{
+    const res = await fetch(url);
+    const data = await res.json();
+    const list = Array.isArray(data?.selected_companies) ? data.selected_companies : [];
+    return list.map(x => String(x||'').trim()).filter(Boolean);
+  }catch(_){
+    return [];
+  }
+}
+
+async function openCompanyMailModal(){
   const modal = document.getElementById('mailModal');
   const sel = document.getElementById('mailCompanySelect');
   const allChk = document.getElementById('mailAllCompanies');
   if(!modal || !sel) return;
-  const companies = _uniqueCompaniesFromDashboard();
+  let companies = _uniqueCompaniesFromDashboard();
+  if(!companies.length){
+    companies = await _companiesFromMailApi();
+  }
   sel.innerHTML = companies.map(c => `<option value="${c}">${c}</option>`).join('');
   if(allChk) allChk.checked = true;
   toggleMailCompanyMode();
@@ -3948,23 +3966,37 @@ def render_cr(
     reminders_kpi_html = ""
 
     lot_map: Dict[str, str] = {}
-    entries_for_lot = get_entries().copy()
-    entries_for_lot = entries_for_lot.loc[_series(entries_for_lot, E_COL_PROJECT_TITLE, "").fillna("").astype(str).str.strip() == project].copy()
+    entries_for_lot = meeting_entries.copy()
+    if entries_for_lot.empty:
+        entries_for_lot = get_entries().copy()
+        entries_for_lot = entries_for_lot.loc[_series(entries_for_lot, E_COL_PROJECT_TITLE, "").fillna("").astype(str).str.strip() == project].copy()
+
     if not entries_for_lot.empty:
         entries_for_lot["__company__"] = _series(entries_for_lot, E_COL_COMPANY_TASK, "").fillna("").astype(str).str.strip()
         entries_for_lot["__lots__"] = _series(entries_for_lot, E_COL_PACKAGES, "").fillna("").astype(str)
+        concern_cols = [
+            col for col in entries_for_lot.columns
+            if ("concerne" in str(col).lower() or "concerned" in str(col).lower() or "concern" in str(col).lower())
+        ]
+        if not concern_cols and E_COL_COMPANY_TASK in entries_for_lot.columns:
+            concern_cols = [E_COL_COMPANY_TASK]
+
         grouped_lots: Dict[str, Dict[str, int]] = {}
         for _, rr in entries_for_lot.iterrows():
-            cname = str(rr.get("__company__", "") or "").strip()
-            if not cname:
+            row_lots = [str(x).strip() for x in _split_multi_labels(str(rr.get("__lots__", "") or "")) if str(x).strip()]
+            if not row_lots:
                 continue
-            key = _norm_name(cname)
-            grouped_lots.setdefault(key, {})
-            for lot in _split_multi_labels(str(rr.get("__lots__", "") or "")):
-                lot_txt = str(lot).strip()
-                if not lot_txt:
-                    continue
-                grouped_lots[key][lot_txt] = int(grouped_lots[key].get(lot_txt, 0)) + 1
+            concerned = [str(x).strip() for x in _companies_concerned_for_row(rr, concern_cols) if str(x).strip()]
+            if not concerned:
+                co_task = str(rr.get("__company__", "") or "").strip()
+                if co_task:
+                    concerned = [co_task]
+            for cname in concerned:
+                key = _norm_name(cname)
+                grouped_lots.setdefault(key, {})
+                for lot_txt in row_lots:
+                    grouped_lots[key][lot_txt] = int(grouped_lots[key].get(lot_txt, 0)) + 1
+
         for key, counts in grouped_lots.items():
             if not counts:
                 continue
