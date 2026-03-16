@@ -526,6 +526,7 @@ def _format_entry_text_html(v) -> str:
     s = re.sub(r"\n[ \t]+", "\n", s)
     s = re.sub(r"(?<!\n)\s*(•|●|◦|▪|‣|\*)\s+", r"\n\1 ", s)
     s = re.sub(r"(?<!\n)(?<!\w)-\s+(?=\S)", r"\n- ", s)
+    s = re.sub(r"\s*--+>\s*", "\n", s)
     s = re.sub(r"\n{3,}", "\n\n", s)
     return _escape(s.strip()).replace("\n", "<br>")
 
@@ -565,7 +566,7 @@ def render_task_comment(r) -> str:
       <div class="topicComment">
         <div class="metaLabel">Commentaire</div>
         <div class="metaVal">{meta or "—"}</div>
-        <div style="margin-top:6px">{body}</div>
+        <div class="commentEditable" style="margin-top:6px">{body}</div>
       </div>
     """
 
@@ -584,7 +585,7 @@ def render_entry_comment(r) -> str:
     return f"""
       <div class="entryComment">
         <div class="metaVal">{meta or "—"}</div>
-        <div style="margin-top:6px">{body}</div>
+        <div class="commentEditable" style="margin-top:6px">{body}</div>
       </div>
     """
 
@@ -844,7 +845,11 @@ def build_company_email_html(
     company: dict,
     items: list[dict],
     meeting_date: date,
-    app_url: str = "https://app.atelier-tempo.fr"
+    app_url: str = "https://app.atelier-tempo.fr",
+    show_created_date: bool = True,
+    reference_date: Optional[date] = None,
+    include_company_kpi: bool = False,
+    company_kpi_rows: Optional[List[dict]] = None,
 ) -> tuple[str, str]:
     """
     returns (subject, html)
@@ -855,6 +860,7 @@ def build_company_email_html(
     meeting_txt = _fmt_mail_date(meeting_date)
     ref_txt = _fmt_mail_date(date.today())
     subject = f"CR Synthèse - {project_name} - Réunion du {meeting_txt}"
+    calc_ref_date = reference_date or date.today()
 
     def _rank(it: dict) -> int:
         tp = str(it.get("type") or "").lower()
@@ -868,10 +874,19 @@ def build_company_email_html(
             return 3
         return 9
 
+    def _item_sort_date(it: dict) -> date:
+        for k in ("due_date", "done_date", "created_date"):
+            d = it.get(k)
+            if isinstance(d, date):
+                return d
+        return date.max
+
     def _safe_text(value: str) -> str:
         return str(value or "").replace("\r\n", "\n").replace("\r", "\n")
+
     def _cell_text(value: str) -> str:
         return escape(_safe_text(value)).replace("\n", "<br/>")
+
     def td(val: str, center: bool = False, raw: bool = False, nowrap: bool = False) -> str:
         align = "center" if center else "left"
         body = str(val or "") if raw else _cell_text(val)
@@ -884,7 +899,6 @@ def build_company_email_html(
         raw_indices = raw_indices or set()
         parts = []
         for idx, c in enumerate(cells):
-            # nowrap uniquement sur colonnes date/fait-le, pas sur Concerne
             use_nowrap = idx in {1, 2, 3}
             parts.append(td(c, center=(idx > 0), raw=(idx in raw_indices), nowrap=use_nowrap))
         return "<tr>" + "".join(parts) + "</tr>"
@@ -920,9 +934,8 @@ def build_company_email_html(
         rows = sorted(
             area_map[area],
             key=lambda it: (
+                _item_sort_date(it),
                 _rank(it),
-                _fmt_mail_date(it.get("due_date")),
-                _fmt_mail_date(it.get("created_date")),
                 _norm_name(str(it.get("subject") or "")),
             ),
         )
@@ -931,15 +944,17 @@ def build_company_email_html(
 
         html_parts.append(f'<p><b><u>{escape(str(area))}</u></b></p>')
 
-        header = (
-            '<thead><tr style="background:#efefef;">'
-            '<th style="border:1px solid #999;padding:6px;text-align:left;">Sujet</th>'
-            '<th style="border:1px solid #999;padding:6px;text-align:center;">Écrit le</th>'
-            '<th style="border:1px solid #999;padding:6px;text-align:center;">Pour le</th>'
-            '<th style="border:1px solid #999;padding:6px;text-align:center;">Fait le</th>'
-            '<th style="border:1px solid #999;padding:6px;text-align:center;">Concerne</th>'
-            '</tr></thead>'
-        )
+        header_cells = [
+            '<th style="border:1px solid #999;padding:6px;text-align:left;">Sujet</th>',
+        ]
+        if show_created_date:
+            header_cells.append('<th style="border:1px solid #999;padding:6px;text-align:center;">Écrit le</th>')
+        header_cells.extend([
+            '<th style="border:1px solid #999;padding:6px;text-align:center;">Pour le</th>',
+            '<th style="border:1px solid #999;padding:6px;text-align:center;">Fait le</th>',
+            '<th style="border:1px solid #999;padding:6px;text-align:center;">Concerne</th>',
+        ])
+        header = '<thead><tr style="background:#efefef;">' + ''.join(header_cells) + '</tr></thead>'
 
         rows_html: List[str] = []
         for it in rows:
@@ -947,27 +962,57 @@ def build_company_email_html(
             ecrit_le = _fmt_mail_date(it.get("created_date"))
             pour_le = "PM" if str(it.get("type") or "") == "memo" else _fmt_mail_date(it.get("due_date"))
             is_reminder = str(it.get("type") or "") == "reminder"
+            due_date = it.get("due_date")
             if is_reminder:
                 rl = int(it.get("reminder_level") or 1)
                 fait_le = f'<span style="color:#b91c1c;font-weight:700">RAPPEL {rl}</span>'
-                raw_cols = {3}
             else:
                 fait_le = str(it.get("done_label") or "").strip() or ("/" if str(it.get("type") or "") == "memo" else "")
-                raw_cols = set()
+
+            if str(it.get("type") or "") == "open" and isinstance(due_date, date):
+                delta = (due_date - calc_ref_date).days
+                if 0 <= delta <= 10:
+                    fait_le = f'<span style="color:#15803d;font-weight:700">J-{delta}</span>'
+
+            raw_cols = set()
             concerne = ", ".join([str(x).strip() for x in (it.get("concerne") or []) if str(x).strip()]) or company_name
-            row_html = tr([sujet, ecrit_le, pour_le, fait_le, concerne], raw_indices=raw_cols)
+            row_vals = [sujet]
+            if show_created_date:
+                row_vals.append(ecrit_le)
+            row_vals.extend([pour_le, fait_le, concerne])
+            if fait_le.startswith("<span"):
+                raw_cols.add(3 if show_created_date else 2)
+            row_html = tr(row_vals, raw_indices=raw_cols)
             rows_html.append(row_html)
 
         colgroup = (
             '<col style="width:64%;" />'
-            '<col style="width:9%;" />'
-            '<col style="width:9%;" />'
-            '<col style="width:9%;" />'
-            '<col style="width:9%;" />'
+            + ('<col style="width:9%;" />' if show_created_date else '')
+            + '<col style="width:9%;" />'
+            + '<col style="width:9%;" />'
+            + '<col style="width:9%;" />'
         )
         table_html = '<table style="width:100%;table-layout:fixed;border-collapse:collapse;border:1px solid #999;">' + colgroup + header + '<tbody>' + ''.join(rows_html) + '</tbody></table>'
         html_parts.append(table_html)
         html_parts.append('<p>&nbsp;</p>')
+
+    if include_company_kpi and company_kpi_rows:
+        html_parts.append('<p><b><u>KPI entreprise — réactivité & assiduité</u></b></p>')
+        html_parts.append('<div style="border:1px solid #999;padding:10px;">')
+        for row in company_kpi_rows:
+            name = escape(str(row.get("company") or "—"))
+            assid = float(row.get("assiduite") or 0.0)
+            react = float(row.get("reactivite") or 0.0)
+            avg_delay = row.get("avg_delay")
+            delay_txt = "n/d" if avg_delay is None else f"{avg_delay:+.1f} j"
+            html_parts.append(
+                "<div style='margin:8px 0 12px 0;'>"
+                f"<div style='font-weight:700;margin-bottom:4px'>{name} — assiduité {assid:.0f}% • réactivité {react:.0f}% • écart moyen {delay_txt}</div>"
+                f"<div style='height:8px;background:#e2e8f0;border-radius:999px;overflow:hidden'><div style='width:{max(0,min(100,assid)):.0f}%;height:100%;background:#0ea5e9'></div></div>"
+                f"<div style='height:8px;background:#e2e8f0;border-radius:999px;overflow:hidden;margin-top:4px'><div style='width:{max(0,min(100,react)):.0f}%;height:100%;background:#22c55e'></div></div>"
+                "</div>"
+            )
+        html_parts.append("</div><p style='font-size:12px;color:#475569'>Assiduité = tâches clôturées / tâches totales. Réactivité = score basé sur l'écart entre &quot;Pour le&quot; et &quot;Fait le&quot; (100% à l'heure ou en avance).</p>")
 
     footer_url = str(app_url or "https://app.atelier-tempo.fr").strip()
     footer_label = footer_url.replace("https://", "").replace("http://", "")
@@ -1844,6 +1889,8 @@ CONSTRAINT_TOGGLES_JS = r"""
     keepSessionHeaderWithNext: true,
     printAutoOptimize: true,
     topScale: true,
+    allowCommentEdit: false,
+    allowPresenceLotEdit: false,
   };
 
   function loadState(){
@@ -1862,6 +1909,38 @@ CONSTRAINT_TOGGLES_JS = r"""
 
   function applyConstraint(name, active){
     body.classList.toggle(`constraint-off-${name}`, !active);
+    if(name === 'allowCommentEdit'){ applyCommentEdit(!!active); }
+    if(name === 'allowPresenceLotEdit'){ applyPresenceLotEdit(!!active); }
+  }
+
+  function applyPresenceLotEdit(enabled){
+    document.querySelectorAll('.presenceLotEditable').forEach(el => {
+      el.setAttribute('contenteditable', enabled ? 'true' : 'false');
+      el.classList.toggle('editableCell', !!enabled);
+    });
+    body.classList.toggle('presenceLotEditMode', !!enabled);
+  }
+
+  function applyCommentEdit(enabled){
+    document.querySelectorAll('.commentEditable').forEach(el => {
+      el.setAttribute('contenteditable', enabled ? 'true' : 'false');
+      el.classList.toggle('editableCell', !!enabled);
+    });
+    body.classList.toggle('commentEditMode', !!enabled);
+  }
+
+  function showCommentEditWarning(){
+    const modal = document.getElementById('commentEditWarnModal');
+    if(!modal) return;
+    modal.style.display = 'flex';
+    modal.setAttribute('aria-hidden', 'false');
+  }
+
+  function hideCommentEditWarning(){
+    const modal = document.getElementById('commentEditWarnModal');
+    if(!modal) return;
+    modal.style.display = 'none';
+    modal.setAttribute('aria-hidden', 'true');
   }
 
   function applyAll(state){
@@ -1876,6 +1955,7 @@ CONSTRAINT_TOGGLES_JS = r"""
     input.addEventListener('change', () => {
       state[name] = !!input.checked;
       applyConstraint(name, state[name]);
+      if(name === 'allowCommentEdit' && state[name]){ showCommentEditWarning(); }
       saveState(state);
       if(window.repaginateReport){ window.repaginateReport(); }
     });
@@ -1903,6 +1983,11 @@ CONSTRAINT_TOGGLES_JS = r"""
 
   document.getElementById('btnConstraints')?.addEventListener('click', () => {
     panel.style.display = panel.style.display === 'none' ? 'flex' : 'none';
+  });
+
+  document.getElementById('commentEditWarnClose')?.addEventListener('click', hideCommentEditWarning);
+  document.getElementById('commentEditWarnModal')?.addEventListener('click', (e) => {
+    if(e.target && e.target.id === 'commentEditWarnModal'){ hideCommentEditWarning(); }
   });
 
   applyAll(state);
@@ -2564,7 +2649,14 @@ def render_home(project: Optional[str] = None, print_mode: bool = False) -> str:
     m[M_COL_PROJECT_TITLE] = m[M_COL_PROJECT_TITLE].fillna("").astype(str).str.strip()
     m = m.loc[m[M_COL_PROJECT_TITLE] != ""].copy()
 
-    projects = sorted(m[M_COL_PROJECT_TITLE].unique().tolist(), key=lambda x: x.lower())
+    projects = set(m[M_COL_PROJECT_TITLE].unique().tolist())
+
+    # Inclut aussi les projets avec des tâches hors réunion (Meeting/ID vide)
+    e = get_entries().copy()
+    e_project = _series(e, E_COL_PROJECT_TITLE, "").fillna("").astype(str).str.strip()
+    e_meeting = _series(e, E_COL_MEETING_ID, "").fillna("").astype(str).str.strip()
+    projects.update(e_project.loc[(e_project != "") & (e_meeting == "")].unique().tolist())
+    projects = sorted(projects, key=lambda x: x.lower())
     if project:
         m = m.loc[m[M_COL_PROJECT_TITLE] == project].copy()
 
@@ -2598,10 +2690,23 @@ function openCR(){
   const projectEl = document.getElementById('project');
   if(!meetingEl){ alert("Champ réunion introuvable"); return; }
   const mid = meetingEl.value || "";
-  if(!mid){ alert("Choisis une réunion."); return; }
+  if(!mid){ alert("Ce projet n'a pas de réunion, compte-rendu indisponible."); return; }
   const p = projectEl ? (projectEl.value || "") : "";
   const url = `/cr?meeting_id=${encodeURIComponent(mid)}&project=${encodeURIComponent(p)}&print=1`;
   window.location.href = url;
+}
+
+
+function syncCrAvailability(){
+  const project = document.getElementById('project')?.value || '';
+  const meeting = document.getElementById('meeting')?.value || '';
+  const btn = document.getElementById('openCrBtn');
+  if(!btn) return;
+  const hasMeeting = !!meeting;
+  btn.disabled = !hasMeeting;
+  btn.style.opacity = hasMeeting ? '1' : '.45';
+  btn.style.cursor = hasMeeting ? 'pointer' : 'not-allowed';
+  btn.title = hasMeeting ? '' : 'Aucune réunion liée à ce projet';
 }
 
 function renderRows(targetId, rows, leftKey, rightKey){
@@ -3258,12 +3363,33 @@ function toggleMailCompanyMode(){
   sel.disabled = !!allChk.checked;
 }
 
-function openCompanyMailModal(){
+async function _companiesFromMailApi(){
+  const meetingEl = document.getElementById('meeting');
+  const projectEl = document.getElementById('project');
+  const qs = new URLSearchParams(window.location.search || '');
+  const meeting = (meetingEl?.value || qs.get('meeting_id') || '').trim();
+  const project = (projectEl?.value || qs.get('project') || '').trim();
+  if(!project && !meeting) return [];
+  const url = `/api/meeting_company_mail_draft?meeting_id=${encodeURIComponent(meeting)}&project=${encodeURIComponent(project)}&all_companies=1`;
+  try{
+    const res = await fetch(url);
+    const data = await res.json();
+    const list = Array.isArray(data?.selected_companies) ? data.selected_companies : [];
+    return list.map(x => String(x||'').trim()).filter(Boolean);
+  }catch(_){
+    return [];
+  }
+}
+
+async function openCompanyMailModal(){
   const modal = document.getElementById('mailModal');
   const sel = document.getElementById('mailCompanySelect');
   const allChk = document.getElementById('mailAllCompanies');
   if(!modal || !sel) return;
-  const companies = _uniqueCompaniesFromDashboard();
+  let companies = _uniqueCompaniesFromDashboard();
+  if(!companies.length){
+    companies = await _companiesFromMailApi();
+  }
   sel.innerHTML = companies.map(c => `<option value="${c}">${c}</option>`).join('');
   if(allChk) allChk.checked = true;
   toggleMailCompanyMode();
@@ -3291,7 +3417,6 @@ function selectedCompaniesForMail(){
 async function generateCompanyMailDraft(){
   const meeting = document.getElementById('meeting')?.value || '';
   const project = document.getElementById('project')?.value || '';
-  if(!meeting){ alert('Choisis une réunion.'); return; }
   const companies = selectedCompaniesForMail();
   const allCompanies = (document.getElementById('mailAllCompanies')?.checked) ? '1' : '0';
   const pStart = document.getElementById('mailPeriodStart')?.value || '';
@@ -3301,7 +3426,8 @@ async function generateCompanyMailDraft(){
   const incRem = document.getElementById('mailIncludeReminders')?.checked ? '1' : '0';
   const incClosed = document.getElementById('mailIncludeClosed')?.checked ? '1' : '0';
   const incWithoutCreated = document.getElementById('mailIncludeWithoutCreated')?.checked ? '1' : '0';
-  const url = `/api/meeting_company_mail_draft?meeting_id=${encodeURIComponent(meeting)}&project=${encodeURIComponent(project)}&selected_companies=${encodeURIComponent(companies.join(','))}&all_companies=${allCompanies}&period_start=${encodeURIComponent(pStart)}&period_end=${encodeURIComponent(pEnd)}&include_tasks=${incTasks}&include_memos=${incMemos}&include_reminders=${incRem}&include_closed=${incClosed}&include_without_created=${incWithoutCreated}`;
+  const incCompanyKpi = document.getElementById('mailIncludeCompanyKpi')?.checked ? '1' : '0';
+  const url = `/api/meeting_company_mail_draft?meeting_id=${encodeURIComponent(meeting)}&project=${encodeURIComponent(project)}&selected_companies=${encodeURIComponent(companies.join(','))}&all_companies=${allCompanies}&period_start=${encodeURIComponent(pStart)}&period_end=${encodeURIComponent(pEnd)}&include_tasks=${incTasks}&include_memos=${incMemos}&include_reminders=${incRem}&include_closed=${incClosed}&include_without_created=${incWithoutCreated}&include_company_kpi=${incCompanyKpi}`;
   const res = await fetch(url);
   const data = await res.json();
   if(data.error){ alert(data.error); return; }
@@ -3317,12 +3443,14 @@ async function refreshDashboard(){
   const area = document.getElementById('filterArea')?.value || '';
   const pack = document.getElementById('filterPackage')?.value || '';
   const status = document.getElementById('filterStatus')?.value || 'open';
-  if(!meeting) return;
+  const hasMeeting = !!meeting;
+  if(!hasMeeting && !project) return;
   const url = `/api/home_meeting_dashboard?meeting_id=${encodeURIComponent(meeting)}&project=${encodeURIComponent(project)}&area=${encodeURIComponent(area)}&package=${encodeURIComponent(pack)}&status_filter=${encodeURIComponent(status)}`;
   const res = await fetch(url);
   const data = await res.json();
   if(data.error){ console.error(data.error); return; }
   window.__homeDashboardData = data;
+  syncCrAvailability();
 
   document.getElementById('kpiRem').textContent = data.kpis?.open_reminders ?? 0;
   document.getElementById('kpiFol').textContent = data.kpis?.open_followups ?? 0;
@@ -3360,6 +3488,7 @@ window.addEventListener('DOMContentLoaded', () => {
   const incRem = document.getElementById('mailIncludeReminders');
   const incClosed = document.getElementById('mailIncludeClosed');
   const incWithoutCreated = document.getElementById('mailIncludeWithoutCreated');
+  const incCompanyKpi = document.getElementById('mailIncludeCompanyKpi');
   if(allChk) allChk.addEventListener('change', () => { toggleMailCompanyMode(); generateCompanyMailDraft(); });
   if(sel) sel.addEventListener('change', generateCompanyMailDraft);
   if(pStart) pStart.addEventListener('change', generateCompanyMailDraft);
@@ -3369,6 +3498,8 @@ window.addEventListener('DOMContentLoaded', () => {
   if(incRem) incRem.addEventListener('change', generateCompanyMailDraft);
   if(incClosed) incClosed.addEventListener('change', generateCompanyMailDraft);
   if(incWithoutCreated) incWithoutCreated.addEventListener('change', generateCompanyMailDraft);
+  if(incCompanyKpi) incCompanyKpi.addEventListener('change', generateCompanyMailDraft);
+  syncCrAvailability();
   refreshDashboard();
 });
 """
@@ -3546,14 +3677,14 @@ body.drawerOpen{{overflow:hidden}}
         </div>
         <div>
           <label>Réunion</label>
-          <select id="meeting" onchange="refreshDashboard()">
-            {meeting_opts if meeting_opts else '<option value="">— Sélectionne un projet —</option>'}
+          <select id="meeting" onchange="syncCrAvailability();refreshDashboard()">
+            {meeting_opts if meeting_opts else '<option value="">— Aucune réunion pour ce projet —</option>'}
           </select>
         </div>
       </div>
 
       <div style="display:flex;gap:10px;margin-top:14px;flex-wrap:wrap">
-        <button class="btn" type="button" onclick="openCR()">Ouvrir le compte-rendu</button><button class="btn secondary" type="button" onclick="openCompanyMailModal()">Préparer mail entreprises</button>
+        <button class="btn" id="openCrBtn" type="button" onclick="openCR()">Ouvrir le compte-rendu</button><button class="btn secondary" type="button" onclick="openCompanyMailModal()">Préparer mail entreprises</button>
       </div>
     </div>
 
@@ -3635,7 +3766,7 @@ body.drawerOpen{{overflow:hidden}}
         <div class="mailField">
           <label><input id="mailAllCompanies" type="checkbox" checked /> Toutes les entreprises (sinon sélection multiple)</label>
           <div class="mailPeriodRow"><label>Du <input id="mailPeriodStart" type="date" /></label><label>Au <input id="mailPeriodEnd" type="date" /></label></div>
-          <div class="mailTypeRow"><label><input id="mailIncludeTasks" type="checkbox" checked /> Tâches</label><label><input id="mailIncludeMemos" type="checkbox" checked /> Mémos</label><label><input id="mailIncludeReminders" type="checkbox" checked /> Rappels</label><label><input id="mailIncludeClosed" type="checkbox" checked /> Tâches clôturées</label><label><input id="mailIncludeWithoutCreated" type="checkbox" checked /> Inclure hors réunion (sans écrit le)</label></div>
+          <div class="mailTypeRow"><label><input id="mailIncludeTasks" type="checkbox" checked /> Tâches</label><label><input id="mailIncludeMemos" type="checkbox" checked /> Mémos</label><label><input id="mailIncludeReminders" type="checkbox" checked /> Rappels</label><label><input id="mailIncludeClosed" type="checkbox" checked /> Tâches clôturées</label><label><input id="mailIncludeWithoutCreated" type="checkbox" checked /> Inclure hors réunion (sans écrit le)</label><label><input id="mailIncludeCompanyKpi" type="checkbox" /> KPI entreprise</label></div>
           <select id="mailCompanySelect" multiple></select>
         </div>
         <div class="mailField">
@@ -3772,6 +3903,8 @@ def render_cr(
     ].copy()
     if not project_history.empty:
         edf2 = project_history.copy()
+        helper_cols = ["__is_task__", "__completed__", "__deadline__", "__done__", "__reminder__"]
+        edf2 = edf2.drop(columns=[c for c in helper_cols if c in edf2.columns], errors="ignore")
         edf2["__is_task__"] = _series(edf2, E_COL_IS_TASK, False).apply(_bool_true)
         edf2["__completed__"] = _series(edf2, E_COL_COMPLETED, False).apply(_bool_true)
         edf2["__deadline__"] = _series(edf2, E_COL_DEADLINE, None).apply(_parse_date_any)
@@ -3781,7 +3914,10 @@ def render_cr(
         edf2 = edf2.loc[edf2["__done__"].notna()].copy()
         days_since_done = pd.to_datetime(ref_date) - pd.to_datetime(edf2["__done__"])
         edf2 = edf2.loc[(days_since_done.dt.days >= 0) & (days_since_done.dt.days <= 14)].copy()
-        edf2["__reminder__"] = edf2.apply(lambda r: reminder_level_at_done(r.get("__deadline__"), r.get("__done__")), axis=1)
+        edf2["__reminder__"] = [
+            reminder_level_at_done(dline, ddone)
+            for dline, ddone in zip(edf2["__deadline__"].tolist(), edf2["__done__"].tolist())
+        ]
         edf2 = _explode_areas(edf2)
         closed_recent_df = edf2
 
@@ -3844,22 +3980,33 @@ def render_cr(
     kpi_table_html = ""
     reminders_kpi_html = ""
 
+    lot_map: Dict[str, str] = {}
+    # Par défaut, on n'affiche pas d'association automatique LOT ↔ entreprise.
+    # Le remplissage peut être fait manuellement via la fonction d'édition des entreprises.
+
     def render_presence_rows(items: List[Dict], label: str) -> str:
         if not items:
-            return f"<tr><td>{_escape(label)} (0)</td><td class='muted'>—</td></tr>"
-        rows = []
-        for it in items:
-            name = _escape(it.get("name", ""))
+            return f"<tr><td>{_escape(label)} (0)</td><td class='muted'>—</td><td class='muted'>—</td></tr>"
+
+        lines = []
+        total = len(items)
+        for idx, it in enumerate(items):
+            name_raw = str(it.get("name", "") or "").strip()
+            name = _escape(name_raw)
             logo = (it.get("logo", "") or "").strip()
             logo_html = f"<img class='coLogo' src='{_escape(logo)}' alt='' loading='lazy' />" if logo.startswith("http") else ""
-            rows.append(f"<li class='presenceLine'>{logo_html}<span>{name}</span></li>")
-        return f"<tr><td>{_escape(label)} ({len(items)})</td><td><ul class='presenceList'>{''.join(rows)}</ul></td></tr>"
+            lot_txt = _escape(lot_map.get(_norm_name(name_raw), "—"))
+            type_cell = f"<td rowspan='{total}'>{_escape(label)} ({total})</td>" if idx == 0 else ""
+            lines.append(
+                f"<tr>{type_cell}<td><div class='presenceLine'>{logo_html}<span>{name}</span></div></td><td><div class='presenceLine'><span class='presenceLotEditable'>{lot_txt}</span></div></td></tr>"
+            )
+        return ''.join(lines)
 
     presence_html = f"""
       <div class="presenceWrap">
         <table class="annexTable coverTable presenceTable">
           <thead>
-            <tr><th>Type</th><th>Entreprises</th></tr>
+            <tr><th>Type</th><th>Entreprises</th><th>LOT</th></tr>
           </thead>
           <tbody>
             {render_presence_rows(att, "Présentes")}
@@ -3926,6 +4073,15 @@ def render_cr(
           <label><input type="checkbox" data-constraint="keepSessionHeaderWithNext" checked /> Ne pas laisser « En séance du » seul en bas de page</label>
           <label><input type="checkbox" data-constraint="printAutoOptimize" checked /> Optimisation auto avant impression</label>
           <label><input type="checkbox" data-constraint="topScale" checked /> Mise à l'échelle du bandeau haut</label>
+          <label><input type="checkbox" data-constraint="allowCommentEdit" /> Autoriser édition des commentaires et observations</label>
+          <label><input type="checkbox" data-constraint="allowPresenceLotEdit" /> Autoriser édition de la colonne LOT (tableau de présence)</label>
+        </div>
+      </div>
+      <div class="warnModal noPrint" id="commentEditWarnModal" style="display:none" aria-hidden="true">
+        <div class="warnCard" role="dialog" aria-modal="true" aria-labelledby="commentEditWarnTitle">
+          <div class="panelTitle" id="commentEditWarnTitle">Édition locale activée</div>
+          <div class="muted">Attention, les modifications textuelles ne seront pas mises à jour sur METRONOME.</div>
+          <div class="warnActions"><button class="btn secondary" type="button" id="commentEditWarnClose">Fermer</button></div>
         </div>
       </div>
       <div class="zoneOrderModal noPrint" id="zoneOrderModal" style="display:none" aria-hidden="true">
@@ -4056,7 +4212,7 @@ def render_cr(
             <td class="colType">{toggle_html}<div>{tag_html or "—"}</div></td>
             <td class="colComment">
               <div class="rowImageTools noPrint"><button type="button" class="btnAddImage">+ Image</button><input type="file" class="imageInput" accept="image/*" multiple hidden /></div>
-              <div class="commentText">{title}</div>
+              <div class="commentText commentEditable">{title}</div>
               {thumbs}
               {render_entry_comment(r)}
             </td>
@@ -4442,6 +4598,14 @@ body.printPreviewMode .noPrintRow{{display:none!important}}
 .zoneOrderGrip{{color:#64748b;font-size:15px;line-height:1}}
 .zoneOrderText{{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
 .zoneOrderActions{{display:flex;justify-content:flex-end;gap:10px;flex-wrap:wrap}}
+.warnModal{{position:fixed;inset:0;z-index:10060;background:rgba(2,6,23,.45);display:none;align-items:center;justify-content:center;padding:20px}}
+.warnCard{{width:min(560px,92vw);background:#fff;border:1px solid var(--border);border-radius:14px;padding:14px;box-shadow:0 16px 34px rgba(2,6,23,.22);display:flex;flex-direction:column;gap:10px}}
+.warnActions{{display:flex;justify-content:flex-end;gap:10px}}
+.commentEditable[contenteditable="true"]{{cursor:text}}
+body.commentEditMode .commentEditable{{outline:1px dashed #94a3b8;outline-offset:2px}}
+.presenceLotEditable[contenteditable="true"]{{cursor:text}}
+body.presenceLotEditMode .presenceLotEditable{{outline:1px dashed #94a3b8;outline-offset:2px}}
+
 @media print{{.actions{{margin:8px 0}} .btn{{padding:8px 10px;font-size:12px}}}}
 
 /* Bleu = sujets réunion */
@@ -4491,7 +4655,7 @@ body.constraint-off-topScale .topPage{{transform:none!important}}
 .sessionSubRow td.colComment{{font-size:12px;color:#111827;font-weight:900;text-decoration:none;}}
 .sessionSubRowCurrent td.colComment{{color:#1d4ed8;text-decoration:underline;text-underline-offset:2px;}}
 .colType{{text-align:center;font-weight:1000;white-space:nowrap;position:relative}}
-.colComment{{white-space:normal;position:relative}}
+.colComment{{white-space:normal;position:relative;text-align:justify;text-justify:inter-word}}
 .rowImageTools{{display:flex;justify-content:flex-end;margin-bottom:4px}}
 .btnAddImage{{border:1px solid #d1d5db;background:#fff;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:800;cursor:pointer}}
 .btnAddImage:hover{{background:#f8fafc}}
@@ -4566,6 +4730,7 @@ body.constraint-off-topScale .topPage{{transform:none!important}}
 .reportHeader .accent{{color:#f59e0b;font-weight:900}}
 .presenceTable .presenceList{{margin:0;padding-left:0;list-style:none;display:flex;flex-direction:column;gap:6px}}
 .presenceTable .presenceLine{{display:flex;align-items:center;gap:8px;font-weight:700}}
+.presenceTable th:nth-child(3),.presenceTable td:nth-child(3){{width:260px}}
 .docFooter{{position:absolute;left:0;right:0;bottom:0;height:24mm;display:grid;grid-template-columns:120px 1fr 120px;align-items:center;gap:10px;padding:3mm 10mm;border-top:1px solid #dbe5f0;background:#fff;overflow:hidden;width:100%;box-sizing:border-box}}
 .docFooter::before{{content:"";position:absolute;left:0;bottom:0;width:170px;height:42px;background:#123f45;clip-path:polygon(0 100%,100% 100%,0 0)}}
 .docFooter::after{{content:"";position:absolute;right:0;bottom:0;width:260px;height:70px;background:#123f45;clip-path:polygon(100% 0,100% 100%,0 100%)}}
@@ -5120,26 +5285,29 @@ def _build_ai_summary_by_area(df: pd.DataFrame, ref_date: date) -> Dict[str, Dic
 
 @app.get("/api/home_meeting_dashboard", response_class=JSONResponse)
 def api_home_meeting_dashboard(
-    meeting_id: str = Query(...),
+    meeting_id: str = Query(default=""),
     project: str = Query(default=""),
     area: str = Query(default=""),
     package: str = Query(default=""),
     status_filter: str = Query(default="open"),
 ):
     try:
-        mrow = meeting_row(meeting_id)
-        project = (project or str(mrow.get(M_COL_PROJECT_TITLE, ""))).strip()
-        meeting_date = _parse_date_any(mrow.get(M_COL_DATE)) or date.today()
+        mrow = None
+        if str(meeting_id or "").strip():
+            mrow = meeting_row(meeting_id)
+            project = (project or str(mrow.get(M_COL_PROJECT_TITLE, ""))).strip()
+            meeting_date = _parse_date_any(mrow.get(M_COL_DATE)) or date.today()
+        else:
+            project = (project or "").strip()
+            meeting_date = date.today()
         ref_date = date.today()
 
-        rem_df = reminders_for_project(project_title=project, ref_date=ref_date, max_level=8)
-        fol_df = followups_for_project(project_title=project, ref_date=ref_date, exclude_entry_ids=set())
-
-        company_counts = reminders_by_company(rem_df)
         company_logo_map = companies_logo_by_name()
 
         entries = get_entries().copy()
         entries = entries.loc[entries[E_COL_PROJECT_TITLE].fillna("").astype(str).str.strip() == project].copy()
+        if not str(meeting_id or "").strip():
+            entries = entries.loc[_series(entries, E_COL_MEETING_ID, "").fillna("").astype(str).str.strip() == ""].copy()
         entries["__is_task__"] = _series(entries, E_COL_IS_TASK, False).apply(_bool_true)
         entries = entries.loc[entries["__is_task__"] == True].copy()
         entries["__deadline__"] = _series(entries, E_COL_DEADLINE, None).apply(_parse_date_any)
@@ -5149,10 +5317,13 @@ def api_home_meeting_dashboard(
 
         if area:
             entries = entries.loc[entries["__area_list__"].astype(str) == area].copy()
-            rem_df = rem_df.loc[rem_df["__area_list__"].astype(str) == area].copy() if not rem_df.empty else rem_df
-            fol_df = fol_df.loc[fol_df["__area_list__"].astype(str) == area].copy() if not fol_df.empty else fol_df
         if package:
             entries = entries.loc[entries["__package_list__"].astype(str) == package].copy()
+
+        rem_source = entries.copy()
+        rem_source["__completed__"] = _series(rem_source, E_COL_COMPLETED, False).apply(_bool_true)
+        rem_df = rem_source.loc[(rem_source["__completed__"] == False) & (rem_source["__deadline__"].notna()) & (rem_source["__deadline__"] < ref_date)].copy()
+        fol_df = rem_source.loc[(rem_source["__completed__"] == False) & (rem_source["__deadline__"].notna()) & (rem_source["__deadline__"] >= ref_date)].copy()
 
         # Rappels entreprises recalculés sur le périmètre/filtre courant
         company_counts = reminders_by_company(rem_df)
@@ -5222,7 +5393,7 @@ def api_home_meeting_dashboard(
                     "task_id": str(r.get(E_COL_ID, "") or "").strip(),
                     "comment": str(r.get(E_COL_TASK_COMMENT_TEXT, "") or "").strip(),
                     "meeting_id": str(r.get(E_COL_MEETING_ID, "") or "").strip(),
-                    "meeting_linked": str(r.get(E_COL_MEETING_ID, "") or "").strip() == str(meeting_id),
+                    "meeting_linked": bool(str(meeting_id or "").strip()) and (str(r.get(E_COL_MEETING_ID, "") or "").strip() == str(meeting_id)),
                     "completed": bool(r.get("__completed__", False)),
                     "status": status,
                 })
@@ -5421,7 +5592,7 @@ def api_meeting_package_email(
 
 @app.get("/api/meeting_company_mail_draft", response_class=JSONResponse)
 def api_meeting_company_mail_draft(
-    meeting_id: str = Query(...),
+    meeting_id: str = Query(default=""),
     project: str = Query(default=""),
     companies: str = Query(default=""),
     selected_companies: str = Query(default=""),
@@ -5433,23 +5604,38 @@ def api_meeting_company_mail_draft(
     include_reminders: bool = Query(default=True),
     include_closed: bool = Query(default=True),
     include_without_created: bool = Query(default=True),
+    include_company_kpi: bool = Query(default=False),
 ):
     try:
-        mrow = meeting_row(meeting_id)
-        project = (project or str(mrow.get(M_COL_PROJECT_TITLE, ""))).strip()
-        meeting_date = _parse_date_any(mrow.get(M_COL_DATE)) or date.today()
+        mrow = None
+        if str(meeting_id or "").strip():
+            mrow = meeting_row(meeting_id)
+            project = (project or str(mrow.get(M_COL_PROJECT_TITLE, ""))).strip()
+            meeting_date = _parse_date_any(mrow.get(M_COL_DATE)) or date.today()
+        else:
+            project = (project or "").strip()
+            meeting_date = date.today()
+        today_ref = date.today()
         p_start = _parse_date_any(period_start) if str(period_start or "").strip() else None
         p_end = _parse_date_any(period_end) if str(period_end or "").strip() else None
         if p_start and p_end and p_start > p_end:
             p_start, p_end = p_end, p_start
 
-        meeting_df = entries_for_meeting(meeting_id).copy()
-        if project:
-            meeting_df = meeting_df.loc[_series(meeting_df, E_COL_PROJECT_TITLE, "").fillna("").astype(str).str.strip() == project].copy()
+        if str(meeting_id or "").strip():
+            meeting_df = entries_for_meeting(meeting_id).copy()
+            if project:
+                meeting_df = meeting_df.loc[_series(meeting_df, E_COL_PROJECT_TITLE, "").fillna("").astype(str).str.strip() == project].copy()
+        else:
+            meeting_df = get_entries().copy()
+            if project:
+                meeting_df = meeting_df.loc[_series(meeting_df, E_COL_PROJECT_TITLE, "").fillna("").astype(str).str.strip() == project].copy()
+            meeting_df = meeting_df.loc[_series(meeting_df, E_COL_MEETING_ID, "").fillna("").astype(str).str.strip() == ""].copy()
 
         all_project_df = get_entries().copy()
         if project:
             all_project_df = all_project_df.loc[_series(all_project_df, E_COL_PROJECT_TITLE, "").fillna("").astype(str).str.strip() == project].copy()
+        if not str(meeting_id or "").strip():
+            all_project_df = all_project_df.loc[_series(all_project_df, E_COL_MEETING_ID, "").fillna("").astype(str).str.strip() == ""].copy()
         if all_project_df.empty:
             return {"emails_detected": [], "subject": "", "html": "", "text_fallback": "Aucune donnée projet."}
 
@@ -5511,6 +5697,10 @@ def api_meeting_company_mail_draft(
 
         target_norm = {_norm_name(x): x for x in target_companies}
         items_all: List[dict] = []
+        company_stats: Dict[str, Dict[str, float]] = {
+            comp: {"total": 0.0, "completed": 0.0, "on_time": 0.0, "delay_sum": 0.0, "delay_count": 0.0}
+            for comp in target_companies
+        }
         for _, r in all_project_df.iterrows():
             concerne_raw = _companies_concerned_for_row(r, concern_cols)
             if not concerne_raw:
@@ -5536,7 +5726,7 @@ def api_meeting_company_mail_draft(
             done_date = r.get("__done_date__")
             rem_lvl = 0
 
-            if (not include_without_created) and (not isinstance(created_date, date)):
+            if str(meeting_id or "").strip() and (not include_without_created) and (not isinstance(created_date, date)):
                 continue
 
             if (not is_task) and not include_memos:
@@ -5561,7 +5751,7 @@ def api_meeting_company_mail_draft(
             # - entrées disponibles à la date de réunion (open/memos)
             # - rappels
             # - sujets "fait-le" dans les 2 semaines avant la réunion
-            if not p_start and not p_end:
+            if str(meeting_id or "").strip() and (not p_start and not p_end):
                 if is_task and is_completed:
                     if not isinstance(done_date, date):
                         continue
@@ -5571,7 +5761,7 @@ def api_meeting_company_mail_draft(
                     if isinstance(created_date, date) and created_date > meeting_date:
                         continue
 
-            is_reminder = bool(is_task and (not is_completed) and isinstance(due_date, date) and due_date < meeting_date)
+            is_reminder = bool(is_task and (not is_completed) and isinstance(due_date, date) and due_date < today_ref)
             if is_task and is_completed and not include_closed:
                 continue
             if is_reminder and not include_reminders:
@@ -5579,9 +5769,9 @@ def api_meeting_company_mail_draft(
             if is_task and (not is_completed) and (not is_reminder) and not include_tasks:
                 continue
 
-            if is_task and not is_completed and isinstance(due_date, date) and due_date < meeting_date:
+            if is_task and not is_completed and isinstance(due_date, date) and due_date < today_ref:
                 itype = "reminder"
-                rem_lvl = int(reminder_level(due_date, False, meeting_date) or 1)
+                rem_lvl = int(reminder_level(due_date, False, today_ref) or 1)
                 done_label = f"RAPPEL {rem_lvl}"
             elif is_task and not is_completed:
                 itype = "open"
@@ -5596,6 +5786,19 @@ def api_meeting_company_mail_draft(
             companies_vals = [str(x).strip() for x in concerne_filtered if str(x).strip()]
             if not companies_vals:
                 continue
+
+            if is_task:
+                for comp in companies_vals:
+                    st = company_stats.setdefault(comp, {"total": 0.0, "completed": 0.0, "on_time": 0.0, "delay_sum": 0.0, "delay_count": 0.0})
+                    st["total"] += 1.0
+                    if is_completed:
+                        st["completed"] += 1.0
+                        if isinstance(due_date, date) and isinstance(done_date, date):
+                            delta_days = float((done_date - due_date).days)
+                            st["delay_sum"] += delta_days
+                            st["delay_count"] += 1.0
+                            if delta_days <= 0:
+                                st["on_time"] += 1.0
 
             lot_vals = _split_multi_labels(str(r.get(E_COL_PACKAGES, "") or "").strip())
             lot_vals = [x for x in lot_vals if str(x).strip()]
@@ -5615,12 +5818,37 @@ def api_meeting_company_mail_draft(
                 "reminder_level": rem_lvl,
             })
 
+        company_kpi_rows: List[dict] = []
+        for comp in target_companies:
+            st = company_stats.get(comp, {})
+            total = float(st.get("total", 0.0) or 0.0)
+            completed = float(st.get("completed", 0.0) or 0.0)
+            assiduite = (completed / total * 100.0) if total > 0 else 0.0
+            delay_count = float(st.get("delay_count", 0.0) or 0.0)
+            avg_delay = (float(st.get("delay_sum", 0.0) or 0.0) / delay_count) if delay_count > 0 else None
+            if avg_delay is None:
+                reactivite = 0.0
+            elif avg_delay <= 0:
+                reactivite = 100.0
+            else:
+                reactivite = max(0.0, 100.0 - (avg_delay * 8.0))
+            company_kpi_rows.append({
+                "company": comp,
+                "assiduite": round(assiduite, 1),
+                "reactivite": round(reactivite, 1),
+                "avg_delay": (round(avg_delay, 1) if avg_delay is not None else None),
+            })
+
         subject, html = build_company_email_html(
             meeting={"project": project, "meeting_id": meeting_id, "selected_company_count": len(target_companies)},
             company={"name": "Toutes les entreprises" if len(target_companies) > 1 else target_companies[0]},
             items=items_all,
             meeting_date=meeting_date,
             app_url="https://app.atelier-tempo.fr",
+            show_created_date=bool(str(meeting_id or "").strip()),
+            reference_date=today_ref,
+            include_company_kpi=include_company_kpi,
+            company_kpi_rows=company_kpi_rows,
         )
         target_phrase_txt = _target_companies_phrase(len(target_companies))
         text_fallback = (
