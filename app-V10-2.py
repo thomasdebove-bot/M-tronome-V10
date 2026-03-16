@@ -1888,6 +1888,7 @@ CONSTRAINT_TOGGLES_JS = r"""
     printAutoOptimize: true,
     topScale: true,
     allowCommentEdit: false,
+    allowPresenceCompanyEdit: false,
   };
 
   function loadState(){
@@ -1907,6 +1908,15 @@ CONSTRAINT_TOGGLES_JS = r"""
   function applyConstraint(name, active){
     body.classList.toggle(`constraint-off-${name}`, !active);
     if(name === 'allowCommentEdit'){ applyCommentEdit(!!active); }
+    if(name === 'allowPresenceCompanyEdit'){ applyPresenceCompanyEdit(!!active); }
+  }
+
+  function applyPresenceCompanyEdit(enabled){
+    document.querySelectorAll('.presenceCompanyEditable').forEach(el => {
+      el.setAttribute('contenteditable', enabled ? 'true' : 'false');
+      el.classList.toggle('editableCell', !!enabled);
+    });
+    body.classList.toggle('presenceCompanyEditMode', !!enabled);
   }
 
   function applyCommentEdit(enabled){
@@ -3969,70 +3979,8 @@ def render_cr(
     reminders_kpi_html = ""
 
     lot_map: Dict[str, str] = {}
-    entries_for_lot = edf.copy()
-    if entries_for_lot.empty:
-        entries_for_lot = get_entries().copy()
-        entries_for_lot = entries_for_lot.loc[_series(entries_for_lot, E_COL_PROJECT_TITLE, "").fillna("").astype(str).str.strip() == project].copy()
-
-    def _same_company(left: str, right: str) -> bool:
-        a = _norm_name(left)
-        b = _norm_name(right)
-        if not a or not b:
-            return False
-        if a == b:
-            return True
-        return (a in b) or (b in a)
-
-    if not entries_for_lot.empty:
-        entries_for_lot["__company__"] = _series(entries_for_lot, E_COL_COMPANY_TASK, "").fillna("").astype(str).str.strip()
-        entries_for_lot["__lots__"] = _series(entries_for_lot, E_COL_PACKAGES, "").fillna("").astype(str)
-
-        def _split_lots_presence(raw_value: str) -> List[str]:
-            raw_txt = str(raw_value or "").strip()
-            if not raw_txt:
-                return []
-            return [p.strip() for p in re.split(r"[;,]+", raw_txt) if p and p.strip()]
-        concern_cols = [
-            col for col in entries_for_lot.columns
-            if ("concerne" in str(col).lower() or "concerned" in str(col).lower() or "concern" in str(col).lower())
-        ]
-        if not concern_cols and E_COL_COMPANY_TASK in entries_for_lot.columns:
-            concern_cols = [E_COL_COMPANY_TASK]
-
-        grouped_lots: Dict[str, Dict[str, int]] = {}
-        present_names = [str(it.get("name", "") or "").strip() for it in (att + miss)]
-        for pname in present_names:
-            if pname:
-                grouped_lots.setdefault(_norm_name(pname), {})
-
-        for _, rr in entries_for_lot.iterrows():
-            row_lots = [str(x).strip() for x in _split_lots_presence(str(rr.get("__lots__", "") or "")) if str(x).strip()]
-            if not row_lots:
-                continue
-
-            candidates = [str(x).strip() for x in _companies_concerned_for_row(rr, concern_cols) if str(x).strip()]
-            if not candidates:
-                co_task = str(rr.get("__company__", "") or "").strip()
-                if co_task:
-                    candidates = [co_task]
-
-            if not candidates:
-                continue
-
-            for pname in present_names:
-                if not pname:
-                    continue
-                pkey = _norm_name(pname)
-                if any(_same_company(cand, pname) for cand in candidates):
-                    grouped_lots.setdefault(pkey, {})
-                    for lot_txt in row_lots:
-                        grouped_lots[pkey][lot_txt] = int(grouped_lots[pkey].get(lot_txt, 0)) + 1
-
-        for key, counts in grouped_lots.items():
-            if not counts:
-                continue
-            lots_sorted = sorted(counts.items(), key=lambda kv: (-int(kv[1]), _norm_name(str(kv[0]))))
-            lot_map[key] = " / ".join([str(l).strip() for l, _ in lots_sorted[:3] if str(l).strip()])
+    # Par défaut, on n'affiche pas d'association automatique LOT ↔ entreprise.
+    # Le remplissage peut être fait manuellement via la fonction d'édition des entreprises.
 
     def render_presence_rows(items: List[Dict], label: str) -> str:
         if not items:
@@ -4048,7 +3996,7 @@ def render_cr(
             lot_txt = _escape(lot_map.get(_norm_name(name_raw), "—"))
             type_cell = f"<td rowspan='{total}'>{_escape(label)} ({total})</td>" if idx == 0 else ""
             lines.append(
-                f"<tr>{type_cell}<td><div class='presenceLine'>{logo_html}<span>{name}</span></div></td><td><div class='presenceLine'><span>{lot_txt}</span></div></td></tr>"
+                f"<tr>{type_cell}<td><div class='presenceLine'>{logo_html}<span class='presenceCompanyEditable'>{name}</span></div></td><td><div class='presenceLine'><span>{lot_txt}</span></div></td></tr>"
             )
         return ''.join(lines)
 
@@ -4124,6 +4072,7 @@ def render_cr(
           <label><input type="checkbox" data-constraint="printAutoOptimize" checked /> Optimisation auto avant impression</label>
           <label><input type="checkbox" data-constraint="topScale" checked /> Mise à l'échelle du bandeau haut</label>
           <label><input type="checkbox" data-constraint="allowCommentEdit" /> Autoriser édition des commentaires et observations</label>
+          <label><input type="checkbox" data-constraint="allowPresenceCompanyEdit" /> Autoriser édition des entreprises (tableau de présence)</label>
         </div>
       </div>
       <div class="warnModal noPrint" id="commentEditWarnModal" style="display:none" aria-hidden="true">
@@ -4652,6 +4601,8 @@ body.printPreviewMode .noPrintRow{{display:none!important}}
 .warnActions{{display:flex;justify-content:flex-end;gap:10px}}
 .commentEditable[contenteditable="true"]{{cursor:text}}
 body.commentEditMode .commentEditable{{outline:1px dashed #94a3b8;outline-offset:2px}}
+.presenceCompanyEditable[contenteditable="true"]{{cursor:text}}
+body.presenceCompanyEditMode .presenceCompanyEditable{{outline:1px dashed #94a3b8;outline-offset:2px}}
 
 @media print{{.actions{{margin:8px 0}} .btn{{padding:8px 10px;font-size:12px}}}}
 
