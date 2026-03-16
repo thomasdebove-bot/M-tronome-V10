@@ -4563,7 +4563,7 @@ body.constraint-off-topScale .topPage{{transform:none!important}}
 .sessionSubRow td.colComment{{font-size:12px;color:#111827;font-weight:900;text-decoration:none;}}
 .sessionSubRowCurrent td.colComment{{color:#1d4ed8;text-decoration:underline;text-underline-offset:2px;}}
 .colType{{text-align:center;font-weight:1000;white-space:nowrap;position:relative}}
-.colComment{{white-space:normal;position:relative}}
+.colComment{{white-space:normal;position:relative;text-align:justify;text-justify:inter-word}}
 .rowImageTools{{display:flex;justify-content:flex-end;margin-bottom:4px}}
 .btnAddImage{{border:1px solid #d1d5db;background:#fff;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:800;cursor:pointer}}
 .btnAddImage:hover{{background:#f8fafc}}
