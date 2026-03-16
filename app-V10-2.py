@@ -3983,7 +3983,7 @@ def render_cr(
             logo_html = f"<img class='coLogo' src='{_escape(logo)}' alt='' loading='lazy' />" if logo.startswith("http") else ""
             rows.append(f"<li class='presenceLine'>{logo_html}<span>{name}</span></li>")
             lot_txt = lot_map.get(_norm_name(name_raw), "—")
-            lots.append(f"<li class='presenceLine'><span>{_escape(name_raw)} - {_escape(lot_txt)}</span></li>")
+            lots.append(f"<li class='presenceLine'><span>{_escape(lot_txt)}</span></li>")
         return f"<tr><td>{_escape(label)} ({len(items)})</td><td><ul class='presenceList'>{''.join(rows)}</ul></td><td><ul class='presenceList'>{''.join(lots)}</ul></td></tr>"
 
     presence_html = f"""
