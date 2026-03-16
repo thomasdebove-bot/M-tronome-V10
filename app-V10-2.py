@@ -526,6 +526,7 @@ def _format_entry_text_html(v) -> str:
     s = re.sub(r"\n[ \t]+", "\n", s)
     s = re.sub(r"(?<!\n)\s*(•|●|◦|▪|‣|\*)\s+", r"\n\1 ", s)
     s = re.sub(r"(?<!\n)(?<!\w)-\s+(?=\S)", r"\n- ", s)
+    s = re.sub(r"\s*--+>\s*", "\n", s)
     s = re.sub(r"\n{3,}", "\n\n", s)
     return _escape(s.strip()).replace("\n", "<br>")
 
@@ -565,7 +566,7 @@ def render_task_comment(r) -> str:
       <div class="topicComment">
         <div class="metaLabel">Commentaire</div>
         <div class="metaVal">{meta or "—"}</div>
-        <div style="margin-top:6px">{body}</div>
+        <div class="commentEditable" style="margin-top:6px">{body}</div>
       </div>
     """
 
@@ -584,7 +585,7 @@ def render_entry_comment(r) -> str:
     return f"""
       <div class="entryComment">
         <div class="metaVal">{meta or "—"}</div>
-        <div style="margin-top:6px">{body}</div>
+        <div class="commentEditable" style="margin-top:6px">{body}</div>
       </div>
     """
 
@@ -846,6 +847,8 @@ def build_company_email_html(
     meeting_date: date,
     app_url: str = "https://app.atelier-tempo.fr",
     show_created_date: bool = True,
+    include_company_kpi: bool = False,
+    company_kpi_rows: Optional[List[dict]] = None,
 ) -> tuple[str, str]:
     """
     returns (subject, html)
@@ -869,10 +872,19 @@ def build_company_email_html(
             return 3
         return 9
 
+    def _item_sort_date(it: dict) -> date:
+        for k in ("due_date", "done_date", "created_date"):
+            d = it.get(k)
+            if isinstance(d, date):
+                return d
+        return date.max
+
     def _safe_text(value: str) -> str:
         return str(value or "").replace("\r\n", "\n").replace("\r", "\n")
+
     def _cell_text(value: str) -> str:
         return escape(_safe_text(value)).replace("\n", "<br/>")
+
     def td(val: str, center: bool = False, raw: bool = False, nowrap: bool = False) -> str:
         align = "center" if center else "left"
         body = str(val or "") if raw else _cell_text(val)
@@ -885,7 +897,6 @@ def build_company_email_html(
         raw_indices = raw_indices or set()
         parts = []
         for idx, c in enumerate(cells):
-            # nowrap uniquement sur colonnes date/fait-le, pas sur Concerne
             use_nowrap = idx in {1, 2, 3}
             parts.append(td(c, center=(idx > 0), raw=(idx in raw_indices), nowrap=use_nowrap))
         return "<tr>" + "".join(parts) + "</tr>"
@@ -921,9 +932,8 @@ def build_company_email_html(
         rows = sorted(
             area_map[area],
             key=lambda it: (
+                _item_sort_date(it),
                 _rank(it),
-                _fmt_mail_date(it.get("due_date")),
-                _fmt_mail_date(it.get("created_date")),
                 _norm_name(str(it.get("subject") or "")),
             ),
         )
@@ -983,6 +993,24 @@ def build_company_email_html(
         table_html = '<table style="width:100%;table-layout:fixed;border-collapse:collapse;border:1px solid #999;">' + colgroup + header + '<tbody>' + ''.join(rows_html) + '</tbody></table>'
         html_parts.append(table_html)
         html_parts.append('<p>&nbsp;</p>')
+
+    if include_company_kpi and company_kpi_rows:
+        html_parts.append('<p><b><u>KPI entreprise — réactivité & assiduité</u></b></p>')
+        html_parts.append('<div style="border:1px solid #999;padding:10px;">')
+        for row in company_kpi_rows:
+            name = escape(str(row.get("company") or "—"))
+            assid = float(row.get("assiduite") or 0.0)
+            react = float(row.get("reactivite") or 0.0)
+            avg_delay = row.get("avg_delay")
+            delay_txt = "n/d" if avg_delay is None else f"{avg_delay:+.1f} j"
+            html_parts.append(
+                "<div style='margin:8px 0 12px 0;'>"
+                f"<div style='font-weight:700;margin-bottom:4px'>{name} — assiduité {assid:.0f}% • réactivité {react:.0f}% • écart moyen {delay_txt}</div>"
+                f"<div style='height:8px;background:#e2e8f0;border-radius:999px;overflow:hidden'><div style='width:{max(0,min(100,assid)):.0f}%;height:100%;background:#0ea5e9'></div></div>"
+                f"<div style='height:8px;background:#e2e8f0;border-radius:999px;overflow:hidden;margin-top:4px'><div style='width:{max(0,min(100,react)):.0f}%;height:100%;background:#22c55e'></div></div>"
+                "</div>"
+            )
+        html_parts.append("</div><p style='font-size:12px;color:#475569'>Assiduité = tâches clôturées / tâches totales. Réactivité = score basé sur l'écart entre &quot;Pour le&quot; et &quot;Fait le&quot; (100% à l'heure ou en avance).</p>")
 
     footer_url = str(app_url or "https://app.atelier-tempo.fr").strip()
     footer_label = footer_url.replace("https://", "").replace("http://", "")
@@ -1859,6 +1887,8 @@ CONSTRAINT_TOGGLES_JS = r"""
     keepSessionHeaderWithNext: true,
     printAutoOptimize: true,
     topScale: true,
+    allowCommentEdit: false,
+    allowPresenceLotEdit: false,
   };
 
   function loadState(){
@@ -1877,6 +1907,38 @@ CONSTRAINT_TOGGLES_JS = r"""
 
   function applyConstraint(name, active){
     body.classList.toggle(`constraint-off-${name}`, !active);
+    if(name === 'allowCommentEdit'){ applyCommentEdit(!!active); }
+    if(name === 'allowPresenceLotEdit'){ applyPresenceLotEdit(!!active); }
+  }
+
+  function applyPresenceLotEdit(enabled){
+    document.querySelectorAll('.presenceLotEditable').forEach(el => {
+      el.setAttribute('contenteditable', enabled ? 'true' : 'false');
+      el.classList.toggle('editableCell', !!enabled);
+    });
+    body.classList.toggle('presenceLotEditMode', !!enabled);
+  }
+
+  function applyCommentEdit(enabled){
+    document.querySelectorAll('.commentEditable').forEach(el => {
+      el.setAttribute('contenteditable', enabled ? 'true' : 'false');
+      el.classList.toggle('editableCell', !!enabled);
+    });
+    body.classList.toggle('commentEditMode', !!enabled);
+  }
+
+  function showCommentEditWarning(){
+    const modal = document.getElementById('commentEditWarnModal');
+    if(!modal) return;
+    modal.style.display = 'flex';
+    modal.setAttribute('aria-hidden', 'false');
+  }
+
+  function hideCommentEditWarning(){
+    const modal = document.getElementById('commentEditWarnModal');
+    if(!modal) return;
+    modal.style.display = 'none';
+    modal.setAttribute('aria-hidden', 'true');
   }
 
   function applyAll(state){
@@ -1891,6 +1953,7 @@ CONSTRAINT_TOGGLES_JS = r"""
     input.addEventListener('change', () => {
       state[name] = !!input.checked;
       applyConstraint(name, state[name]);
+      if(name === 'allowCommentEdit' && state[name]){ showCommentEditWarning(); }
       saveState(state);
       if(window.repaginateReport){ window.repaginateReport(); }
     });
@@ -1918,6 +1981,11 @@ CONSTRAINT_TOGGLES_JS = r"""
 
   document.getElementById('btnConstraints')?.addEventListener('click', () => {
     panel.style.display = panel.style.display === 'none' ? 'flex' : 'none';
+  });
+
+  document.getElementById('commentEditWarnClose')?.addEventListener('click', hideCommentEditWarning);
+  document.getElementById('commentEditWarnModal')?.addEventListener('click', (e) => {
+    if(e.target && e.target.id === 'commentEditWarnModal'){ hideCommentEditWarning(); }
   });
 
   applyAll(state);
@@ -3293,12 +3361,33 @@ function toggleMailCompanyMode(){
   sel.disabled = !!allChk.checked;
 }
 
-function openCompanyMailModal(){
+async function _companiesFromMailApi(){
+  const meetingEl = document.getElementById('meeting');
+  const projectEl = document.getElementById('project');
+  const qs = new URLSearchParams(window.location.search || '');
+  const meeting = (meetingEl?.value || qs.get('meeting_id') || '').trim();
+  const project = (projectEl?.value || qs.get('project') || '').trim();
+  if(!project && !meeting) return [];
+  const url = `/api/meeting_company_mail_draft?meeting_id=${encodeURIComponent(meeting)}&project=${encodeURIComponent(project)}&all_companies=1`;
+  try{
+    const res = await fetch(url);
+    const data = await res.json();
+    const list = Array.isArray(data?.selected_companies) ? data.selected_companies : [];
+    return list.map(x => String(x||'').trim()).filter(Boolean);
+  }catch(_){
+    return [];
+  }
+}
+
+async function openCompanyMailModal(){
   const modal = document.getElementById('mailModal');
   const sel = document.getElementById('mailCompanySelect');
   const allChk = document.getElementById('mailAllCompanies');
   if(!modal || !sel) return;
-  const companies = _uniqueCompaniesFromDashboard();
+  let companies = _uniqueCompaniesFromDashboard();
+  if(!companies.length){
+    companies = await _companiesFromMailApi();
+  }
   sel.innerHTML = companies.map(c => `<option value="${c}">${c}</option>`).join('');
   if(allChk) allChk.checked = true;
   toggleMailCompanyMode();
@@ -3335,7 +3424,8 @@ async function generateCompanyMailDraft(){
   const incRem = document.getElementById('mailIncludeReminders')?.checked ? '1' : '0';
   const incClosed = document.getElementById('mailIncludeClosed')?.checked ? '1' : '0';
   const incWithoutCreated = document.getElementById('mailIncludeWithoutCreated')?.checked ? '1' : '0';
-  const url = `/api/meeting_company_mail_draft?meeting_id=${encodeURIComponent(meeting)}&project=${encodeURIComponent(project)}&selected_companies=${encodeURIComponent(companies.join(','))}&all_companies=${allCompanies}&period_start=${encodeURIComponent(pStart)}&period_end=${encodeURIComponent(pEnd)}&include_tasks=${incTasks}&include_memos=${incMemos}&include_reminders=${incRem}&include_closed=${incClosed}&include_without_created=${incWithoutCreated}`;
+  const incCompanyKpi = document.getElementById('mailIncludeCompanyKpi')?.checked ? '1' : '0';
+  const url = `/api/meeting_company_mail_draft?meeting_id=${encodeURIComponent(meeting)}&project=${encodeURIComponent(project)}&selected_companies=${encodeURIComponent(companies.join(','))}&all_companies=${allCompanies}&period_start=${encodeURIComponent(pStart)}&period_end=${encodeURIComponent(pEnd)}&include_tasks=${incTasks}&include_memos=${incMemos}&include_reminders=${incRem}&include_closed=${incClosed}&include_without_created=${incWithoutCreated}&include_company_kpi=${incCompanyKpi}`;
   const res = await fetch(url);
   const data = await res.json();
   if(data.error){ alert(data.error); return; }
@@ -3396,6 +3486,7 @@ window.addEventListener('DOMContentLoaded', () => {
   const incRem = document.getElementById('mailIncludeReminders');
   const incClosed = document.getElementById('mailIncludeClosed');
   const incWithoutCreated = document.getElementById('mailIncludeWithoutCreated');
+  const incCompanyKpi = document.getElementById('mailIncludeCompanyKpi');
   if(allChk) allChk.addEventListener('change', () => { toggleMailCompanyMode(); generateCompanyMailDraft(); });
   if(sel) sel.addEventListener('change', generateCompanyMailDraft);
   if(pStart) pStart.addEventListener('change', generateCompanyMailDraft);
@@ -3405,6 +3496,7 @@ window.addEventListener('DOMContentLoaded', () => {
   if(incRem) incRem.addEventListener('change', generateCompanyMailDraft);
   if(incClosed) incClosed.addEventListener('change', generateCompanyMailDraft);
   if(incWithoutCreated) incWithoutCreated.addEventListener('change', generateCompanyMailDraft);
+  if(incCompanyKpi) incCompanyKpi.addEventListener('change', generateCompanyMailDraft);
   syncCrAvailability();
   refreshDashboard();
 });
@@ -3672,7 +3764,7 @@ body.drawerOpen{{overflow:hidden}}
         <div class="mailField">
           <label><input id="mailAllCompanies" type="checkbox" checked /> Toutes les entreprises (sinon sélection multiple)</label>
           <div class="mailPeriodRow"><label>Du <input id="mailPeriodStart" type="date" /></label><label>Au <input id="mailPeriodEnd" type="date" /></label></div>
-          <div class="mailTypeRow"><label><input id="mailIncludeTasks" type="checkbox" checked /> Tâches</label><label><input id="mailIncludeMemos" type="checkbox" checked /> Mémos</label><label><input id="mailIncludeReminders" type="checkbox" checked /> Rappels</label><label><input id="mailIncludeClosed" type="checkbox" checked /> Tâches clôturées</label><label><input id="mailIncludeWithoutCreated" type="checkbox" checked /> Inclure hors réunion (sans écrit le)</label></div>
+          <div class="mailTypeRow"><label><input id="mailIncludeTasks" type="checkbox" checked /> Tâches</label><label><input id="mailIncludeMemos" type="checkbox" checked /> Mémos</label><label><input id="mailIncludeReminders" type="checkbox" checked /> Rappels</label><label><input id="mailIncludeClosed" type="checkbox" checked /> Tâches clôturées</label><label><input id="mailIncludeWithoutCreated" type="checkbox" checked /> Inclure hors réunion (sans écrit le)</label><label><input id="mailIncludeCompanyKpi" type="checkbox" /> KPI entreprise</label></div>
           <select id="mailCompanySelect" multiple></select>
         </div>
         <div class="mailField">
@@ -3809,6 +3901,8 @@ def render_cr(
     ].copy()
     if not project_history.empty:
         edf2 = project_history.copy()
+        helper_cols = ["__is_task__", "__completed__", "__deadline__", "__done__", "__reminder__"]
+        edf2 = edf2.drop(columns=[c for c in helper_cols if c in edf2.columns], errors="ignore")
         edf2["__is_task__"] = _series(edf2, E_COL_IS_TASK, False).apply(_bool_true)
         edf2["__completed__"] = _series(edf2, E_COL_COMPLETED, False).apply(_bool_true)
         edf2["__deadline__"] = _series(edf2, E_COL_DEADLINE, None).apply(_parse_date_any)
@@ -3818,7 +3912,10 @@ def render_cr(
         edf2 = edf2.loc[edf2["__done__"].notna()].copy()
         days_since_done = pd.to_datetime(ref_date) - pd.to_datetime(edf2["__done__"])
         edf2 = edf2.loc[(days_since_done.dt.days >= 0) & (days_since_done.dt.days <= 14)].copy()
-        edf2["__reminder__"] = edf2.apply(lambda r: reminder_level_at_done(r.get("__deadline__"), r.get("__done__")), axis=1)
+        edf2["__reminder__"] = [
+            reminder_level_at_done(dline, ddone)
+            for dline, ddone in zip(edf2["__deadline__"].tolist(), edf2["__done__"].tolist())
+        ]
         edf2 = _explode_areas(edf2)
         closed_recent_df = edf2
 
@@ -3881,22 +3978,33 @@ def render_cr(
     kpi_table_html = ""
     reminders_kpi_html = ""
 
+    lot_map: Dict[str, str] = {}
+    # Par défaut, on n'affiche pas d'association automatique LOT ↔ entreprise.
+    # Le remplissage peut être fait manuellement via la fonction d'édition des entreprises.
+
     def render_presence_rows(items: List[Dict], label: str) -> str:
         if not items:
-            return f"<tr><td>{_escape(label)} (0)</td><td class='muted'>—</td></tr>"
-        rows = []
-        for it in items:
-            name = _escape(it.get("name", ""))
+            return f"<tr><td>{_escape(label)} (0)</td><td class='muted'>—</td><td class='muted'>—</td></tr>"
+
+        lines = []
+        total = len(items)
+        for idx, it in enumerate(items):
+            name_raw = str(it.get("name", "") or "").strip()
+            name = _escape(name_raw)
             logo = (it.get("logo", "") or "").strip()
             logo_html = f"<img class='coLogo' src='{_escape(logo)}' alt='' loading='lazy' />" if logo.startswith("http") else ""
-            rows.append(f"<li class='presenceLine'>{logo_html}<span>{name}</span></li>")
-        return f"<tr><td>{_escape(label)} ({len(items)})</td><td><ul class='presenceList'>{''.join(rows)}</ul></td></tr>"
+            lot_txt = _escape(lot_map.get(_norm_name(name_raw), "—"))
+            type_cell = f"<td rowspan='{total}'>{_escape(label)} ({total})</td>" if idx == 0 else ""
+            lines.append(
+                f"<tr>{type_cell}<td><div class='presenceLine'>{logo_html}<span>{name}</span></div></td><td><div class='presenceLine'><span class='presenceLotEditable'>{lot_txt}</span></div></td></tr>"
+            )
+        return ''.join(lines)
 
     presence_html = f"""
       <div class="presenceWrap">
         <table class="annexTable coverTable presenceTable">
           <thead>
-            <tr><th>Type</th><th>Entreprises</th></tr>
+            <tr><th>Type</th><th>Entreprises</th><th>LOT</th></tr>
           </thead>
           <tbody>
             {render_presence_rows(att, "Présentes")}
@@ -3963,6 +4071,15 @@ def render_cr(
           <label><input type="checkbox" data-constraint="keepSessionHeaderWithNext" checked /> Ne pas laisser « En séance du » seul en bas de page</label>
           <label><input type="checkbox" data-constraint="printAutoOptimize" checked /> Optimisation auto avant impression</label>
           <label><input type="checkbox" data-constraint="topScale" checked /> Mise à l'échelle du bandeau haut</label>
+          <label><input type="checkbox" data-constraint="allowCommentEdit" /> Autoriser édition des commentaires et observations</label>
+          <label><input type="checkbox" data-constraint="allowPresenceLotEdit" /> Autoriser édition de la colonne LOT (tableau de présence)</label>
+        </div>
+      </div>
+      <div class="warnModal noPrint" id="commentEditWarnModal" style="display:none" aria-hidden="true">
+        <div class="warnCard" role="dialog" aria-modal="true" aria-labelledby="commentEditWarnTitle">
+          <div class="panelTitle" id="commentEditWarnTitle">Édition locale activée</div>
+          <div class="muted">Attention, les modifications textuelles ne seront pas mises à jour sur METRONOME.</div>
+          <div class="warnActions"><button class="btn secondary" type="button" id="commentEditWarnClose">Fermer</button></div>
         </div>
       </div>
       <div class="zoneOrderModal noPrint" id="zoneOrderModal" style="display:none" aria-hidden="true">
@@ -4093,7 +4210,7 @@ def render_cr(
             <td class="colType">{toggle_html}<div>{tag_html or "—"}</div></td>
             <td class="colComment">
               <div class="rowImageTools noPrint"><button type="button" class="btnAddImage">+ Image</button><input type="file" class="imageInput" accept="image/*" multiple hidden /></div>
-              <div class="commentText">{title}</div>
+              <div class="commentText commentEditable">{title}</div>
               {thumbs}
               {render_entry_comment(r)}
             </td>
@@ -4479,6 +4596,14 @@ body.printPreviewMode .noPrintRow{{display:none!important}}
 .zoneOrderGrip{{color:#64748b;font-size:15px;line-height:1}}
 .zoneOrderText{{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
 .zoneOrderActions{{display:flex;justify-content:flex-end;gap:10px;flex-wrap:wrap}}
+.warnModal{{position:fixed;inset:0;z-index:10060;background:rgba(2,6,23,.45);display:none;align-items:center;justify-content:center;padding:20px}}
+.warnCard{{width:min(560px,92vw);background:#fff;border:1px solid var(--border);border-radius:14px;padding:14px;box-shadow:0 16px 34px rgba(2,6,23,.22);display:flex;flex-direction:column;gap:10px}}
+.warnActions{{display:flex;justify-content:flex-end;gap:10px}}
+.commentEditable[contenteditable="true"]{{cursor:text}}
+body.commentEditMode .commentEditable{{outline:1px dashed #94a3b8;outline-offset:2px}}
+.presenceLotEditable[contenteditable="true"]{{cursor:text}}
+body.presenceLotEditMode .presenceLotEditable{{outline:1px dashed #94a3b8;outline-offset:2px}}
+
 @media print{{.actions{{margin:8px 0}} .btn{{padding:8px 10px;font-size:12px}}}}
 
 /* Bleu = sujets réunion */
@@ -4528,7 +4653,7 @@ body.constraint-off-topScale .topPage{{transform:none!important}}
 .sessionSubRow td.colComment{{font-size:12px;color:#111827;font-weight:900;text-decoration:none;}}
 .sessionSubRowCurrent td.colComment{{color:#1d4ed8;text-decoration:underline;text-underline-offset:2px;}}
 .colType{{text-align:center;font-weight:1000;white-space:nowrap;position:relative}}
-.colComment{{white-space:normal;position:relative}}
+.colComment{{white-space:normal;position:relative;text-align:justify;text-justify:inter-word}}
 .rowImageTools{{display:flex;justify-content:flex-end;margin-bottom:4px}}
 .btnAddImage{{border:1px solid #d1d5db;background:#fff;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:800;cursor:pointer}}
 .btnAddImage:hover{{background:#f8fafc}}
@@ -4603,6 +4728,7 @@ body.constraint-off-topScale .topPage{{transform:none!important}}
 .reportHeader .accent{{color:#f59e0b;font-weight:900}}
 .presenceTable .presenceList{{margin:0;padding-left:0;list-style:none;display:flex;flex-direction:column;gap:6px}}
 .presenceTable .presenceLine{{display:flex;align-items:center;gap:8px;font-weight:700}}
+.presenceTable th:nth-child(3),.presenceTable td:nth-child(3){{width:260px}}
 .docFooter{{position:absolute;left:0;right:0;bottom:0;height:24mm;display:grid;grid-template-columns:120px 1fr 120px;align-items:center;gap:10px;padding:3mm 10mm;border-top:1px solid #dbe5f0;background:#fff;overflow:hidden;width:100%;box-sizing:border-box}}
 .docFooter::before{{content:"";position:absolute;left:0;bottom:0;width:170px;height:42px;background:#123f45;clip-path:polygon(0 100%,100% 100%,0 0)}}
 .docFooter::after{{content:"";position:absolute;right:0;bottom:0;width:260px;height:70px;background:#123f45;clip-path:polygon(100% 0,100% 100%,0 100%)}}
@@ -5476,6 +5602,7 @@ def api_meeting_company_mail_draft(
     include_reminders: bool = Query(default=True),
     include_closed: bool = Query(default=True),
     include_without_created: bool = Query(default=True),
+    include_company_kpi: bool = Query(default=False),
 ):
     try:
         mrow = None
@@ -5567,6 +5694,10 @@ def api_meeting_company_mail_draft(
 
         target_norm = {_norm_name(x): x for x in target_companies}
         items_all: List[dict] = []
+        company_stats: Dict[str, Dict[str, float]] = {
+            comp: {"total": 0.0, "completed": 0.0, "on_time": 0.0, "delay_sum": 0.0, "delay_count": 0.0}
+            for comp in target_companies
+        }
         for _, r in all_project_df.iterrows():
             concerne_raw = _companies_concerned_for_row(r, concern_cols)
             if not concerne_raw:
@@ -5653,6 +5784,19 @@ def api_meeting_company_mail_draft(
             if not companies_vals:
                 continue
 
+            if is_task:
+                for comp in companies_vals:
+                    st = company_stats.setdefault(comp, {"total": 0.0, "completed": 0.0, "on_time": 0.0, "delay_sum": 0.0, "delay_count": 0.0})
+                    st["total"] += 1.0
+                    if is_completed:
+                        st["completed"] += 1.0
+                        if isinstance(due_date, date) and isinstance(done_date, date):
+                            delta_days = float((done_date - due_date).days)
+                            st["delay_sum"] += delta_days
+                            st["delay_count"] += 1.0
+                            if delta_days <= 0:
+                                st["on_time"] += 1.0
+
             lot_vals = _split_multi_labels(str(r.get(E_COL_PACKAGES, "") or "").strip())
             lot_vals = [x for x in lot_vals if str(x).strip()]
             if not lot_vals:
@@ -5671,6 +5815,27 @@ def api_meeting_company_mail_draft(
                 "reminder_level": rem_lvl,
             })
 
+        company_kpi_rows: List[dict] = []
+        for comp in target_companies:
+            st = company_stats.get(comp, {})
+            total = float(st.get("total", 0.0) or 0.0)
+            completed = float(st.get("completed", 0.0) or 0.0)
+            assiduite = (completed / total * 100.0) if total > 0 else 0.0
+            delay_count = float(st.get("delay_count", 0.0) or 0.0)
+            avg_delay = (float(st.get("delay_sum", 0.0) or 0.0) / delay_count) if delay_count > 0 else None
+            if avg_delay is None:
+                reactivite = 0.0
+            elif avg_delay <= 0:
+                reactivite = 100.0
+            else:
+                reactivite = max(0.0, 100.0 - (avg_delay * 8.0))
+            company_kpi_rows.append({
+                "company": comp,
+                "assiduite": round(assiduite, 1),
+                "reactivite": round(reactivite, 1),
+                "avg_delay": (round(avg_delay, 1) if avg_delay is not None else None),
+            })
+
         subject, html = build_company_email_html(
             meeting={"project": project, "meeting_id": meeting_id, "selected_company_count": len(target_companies)},
             company={"name": "Toutes les entreprises" if len(target_companies) > 1 else target_companies[0]},
@@ -5678,6 +5843,8 @@ def api_meeting_company_mail_draft(
             meeting_date=meeting_date,
             app_url="https://app.atelier-tempo.fr",
             show_created_date=bool(str(meeting_id or "").strip()),
+            include_company_kpi=include_company_kpi,
+            company_kpi_rows=company_kpi_rows,
         )
         target_phrase_txt = _target_companies_phrase(len(target_companies))
         text_fallback = (
