@@ -3839,6 +3839,8 @@ def render_cr(
     ].copy()
     if not project_history.empty:
         edf2 = project_history.copy()
+        helper_cols = ["__is_task__", "__completed__", "__deadline__", "__done__", "__reminder__"]
+        edf2 = edf2.drop(columns=[c for c in helper_cols if c in edf2.columns], errors="ignore")
         edf2["__is_task__"] = _series(edf2, E_COL_IS_TASK, False).apply(_bool_true)
         edf2["__completed__"] = _series(edf2, E_COL_COMPLETED, False).apply(_bool_true)
         edf2["__deadline__"] = _series(edf2, E_COL_DEADLINE, None).apply(_parse_date_any)
@@ -3848,7 +3850,10 @@ def render_cr(
         edf2 = edf2.loc[edf2["__done__"].notna()].copy()
         days_since_done = pd.to_datetime(ref_date) - pd.to_datetime(edf2["__done__"])
         edf2 = edf2.loc[(days_since_done.dt.days >= 0) & (days_since_done.dt.days <= 14)].copy()
-        edf2["__reminder__"] = edf2.apply(lambda r: reminder_level_at_done(r.get("__deadline__"), r.get("__done__")), axis=1)
+        edf2["__reminder__"] = [
+            reminder_level_at_done(dline, ddone)
+            for dline, ddone in zip(edf2["__deadline__"].tolist(), edf2["__done__"].tolist())
+        ]
         edf2 = _explode_areas(edf2)
         closed_recent_df = edf2
 
