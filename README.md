@@ -13,6 +13,10 @@ Si PowerShell rencontre une erreur, la fenêtre peut se fermer trop vite quand o
 directement le `.ps1`. Le `.bat` lance PowerShell avec `-NoExit` pour garder la fenêtre
 ouverte et permettre de lire le message `[ERREUR]` et le détail.
 
+En mode `FastAPI`, le build embarque aussi le fichier Python d'entrée dans l'EXE, ce qui
+évite l'erreur au lancement sur un autre poste si `app-V10-2.py` n'est pas présent à côté
+de l'exécutable.
+
 ### Utilisation
 
 Depuis l'explorateur Windows :

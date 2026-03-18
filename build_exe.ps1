@@ -46,6 +46,13 @@ function Resolve-EntryPath([string]$PathValue) {
     return (Resolve-Path $candidate).Path
 }
 
+function Get-PyInstallerDataArg([string]$SourcePath, [string]$DestRelativePath = ".") {
+    if ($IsWindows -or $env:OS -eq "Windows_NT") {
+        return "--add-data=$SourcePath;$DestRelativePath"
+    }
+    return "--add-data=$SourcePath`:$DestRelativePath"
+}
+
 try {
     $entryAbs = Resolve-EntryPath $EntryScript
     Step "Script d'entrée: $entryAbs"
@@ -78,17 +85,24 @@ try {
         Step "Génération d'un launcher FastAPI"
 
         $entryEscaped = $entryAbs.Replace("\\", "\\\\")
+        $entryFileName = [System.IO.Path]::GetFileName($entryAbs)
         $launcherCode = @"
 import importlib.util
 import pathlib
 import sys
 import uvicorn
 
-ENTRY_PATH = pathlib.Path(r"$entryEscaped")
+ENTRY_FILE_NAME = "$entryFileName"
 APP_VAR = "$AppVarName"
 HOST = "$BindHost"
 PORT = $Port
 OPEN_BROWSER = $OpenBrowser
+
+if getattr(sys, "frozen", False):
+    entry_base = pathlib.Path(getattr(sys, "_MEIPASS", pathlib.Path(sys.executable).resolve().parent))
+    ENTRY_PATH = entry_base / ENTRY_FILE_NAME
+else:
+    ENTRY_PATH = pathlib.Path(r"$entryEscaped")
 
 spec = importlib.util.spec_from_file_location("tempo_app_module", str(ENTRY_PATH))
 module = importlib.util.module_from_spec(spec)
@@ -123,7 +137,8 @@ uvicorn.run(app, host=HOST, port=PORT, log_level="info")
             "--hidden-import=starlette",
             "--hidden-import=anyio",
             "--hidden-import=pydantic",
-            "--hidden-import=pandas"
+            "--hidden-import=pandas",
+            (Get-PyInstallerDataArg -SourcePath $entryAbs -DestRelativePath ".")
         )
     }
 
