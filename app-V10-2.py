@@ -3911,7 +3911,7 @@ def render_cr(
     rem_df = reminders_for_project(
         project_title=project,
         ref_date=range_ref_date,
-        max_level=8,
+        max_level=999,
         start_date=range_start_date,
         end_date=range_end_date,
     )
