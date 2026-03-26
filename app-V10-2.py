@@ -3903,17 +3903,31 @@ def render_cr(
     ].copy()
     if not project_history.empty:
         edf2 = project_history.copy()
-        helper_cols = ["__is_task__", "__completed__", "__deadline__", "__done__", "__reminder__"]
+        helper_cols = ["__is_task__", "__completed__", "__deadline__", "__done__", "__created__", "__reminder__"]
         edf2 = edf2.drop(columns=[c for c in helper_cols if c in edf2.columns], errors="ignore")
         edf2["__is_task__"] = _series(edf2, E_COL_IS_TASK, False).apply(_bool_true)
         edf2["__completed__"] = _series(edf2, E_COL_COMPLETED, False).apply(_bool_true)
         edf2["__deadline__"] = _series(edf2, E_COL_DEADLINE, None).apply(_parse_date_any)
         edf2["__done__"] = _series(edf2, E_COL_COMPLETED_END, None).apply(_parse_date_any)
+        edf2["__created__"] = _series(edf2, E_COL_CREATED, None).apply(_parse_date_any)
         edf2.loc[edf2["__done__"].notna(), "__completed__"] = True
         edf2 = edf2.loc[(edf2["__is_task__"] == True) & (edf2["__completed__"] == True)].copy()
-        edf2 = edf2.loc[edf2["__done__"].notna()].copy()
-        days_since_done = pd.to_datetime(ref_date) - pd.to_datetime(edf2["__done__"])
-        edf2 = edf2.loc[(days_since_done.dt.days >= 0) & (days_since_done.dt.days <= 14)].copy()
+        if range_active:
+            if range_start_date is not None:
+                edf2 = edf2.loc[
+                    ((edf2["__done__"].notna()) & (edf2["__done__"] >= range_start_date))
+                    | ((edf2["__done__"].isna()) & (edf2["__created__"].notna()) & (edf2["__created__"] >= range_start_date))
+                ].copy()
+            if range_end_date is not None:
+                edf2 = edf2.loc[
+                    ((edf2["__done__"].notna()) & (edf2["__done__"] <= range_end_date))
+                    | ((edf2["__done__"].isna()) & (edf2["__created__"].notna()) & (edf2["__created__"] <= range_end_date))
+                ].copy()
+        else:
+            edf2 = edf2.loc[
+                ((edf2["__done__"].notna()) & (edf2["__done__"] <= ref_date))
+                | ((edf2["__done__"].isna()) & ((edf2["__created__"].isna()) | (edf2["__created__"] <= ref_date)))
+            ].copy()
         edf2["__reminder__"] = [
             reminder_level_at_done(dline, ddone)
             for dline, ddone in zip(edf2["__deadline__"].tolist(), edf2["__done__"].tolist())
@@ -5750,12 +5764,13 @@ def api_meeting_company_mail_draft(
             # Fenêtre par défaut (si aucune période saisie):
             # - entrées disponibles à la date de réunion (open/memos)
             # - rappels
-            # - sujets "fait-le" dans les 2 semaines avant la réunion
+            # - tâches clôturées jusqu'à la date de réunion
             if str(meeting_id or "").strip() and (not p_start and not p_end):
                 if is_task and is_completed:
-                    if not isinstance(done_date, date):
-                        continue
-                    if not (meeting_date - timedelta(days=14) <= done_date <= meeting_date):
+                    if isinstance(done_date, date):
+                        if done_date > meeting_date:
+                            continue
+                    elif isinstance(created_date, date) and created_date > meeting_date:
                         continue
                 else:
                     if isinstance(created_date, date) and created_date > meeting_date:
