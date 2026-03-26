@@ -5355,6 +5355,8 @@ def api_home_meeting_dashboard(
         entries = entries.loc[entries["__deadline__"].notna()].copy()
         entries = _explode_areas(entries)
         entries = _explode_packages(entries)
+        entries["__company__"] = _series(entries, E_COL_COMPANY_TASK, "").fillna("").astype(str).str.strip()
+        entries["__company__"] = entries["__company__"].replace("", "Non renseigné")
 
         if area:
             entries = entries.loc[entries["__area_list__"].astype(str) == area].copy()
@@ -5384,8 +5386,6 @@ def api_home_meeting_dashboard(
                     & (entries["__deadline__"] < ref_date)
                 ].copy()
 
-            entries["__company__"] = _series(entries, E_COL_COMPANY_TASK, "").fillna("").astype(str).str.strip()
-            entries["__company__"] = entries["__company__"].replace("", "Non renseigné")
             entries["__start__"] = _series(entries, E_COL_CREATED, None).apply(_parse_date_any)
             entries["__start__"] = entries.apply(
                 lambda r: r["__start__"] if r["__start__"] is not None else r["__deadline__"] - timedelta(days=7), axis=1
