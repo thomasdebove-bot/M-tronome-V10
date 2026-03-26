@@ -3445,37 +3445,64 @@ async function refreshDashboard(){
   const status = document.getElementById('filterStatus')?.value || 'open';
   const hasMeeting = !!meeting;
   if(!hasMeeting && !project) return;
-  const url = `/api/home_meeting_dashboard?meeting_id=${encodeURIComponent(meeting)}&project=${encodeURIComponent(project)}&area=${encodeURIComponent(area)}&package=${encodeURIComponent(pack)}&status_filter=${encodeURIComponent(status)}`;
-  const res = await fetch(url);
-  const data = await res.json();
-  if(data.error){ console.error(data.error); return; }
-  window.__homeDashboardData = data;
-  syncCrAvailability();
 
-  document.getElementById('kpiRem').textContent = data.kpis?.open_reminders ?? 0;
-  document.getElementById('kpiFol').textContent = data.kpis?.open_followups ?? 0;
-  document.getElementById('kpiDate').textContent = data.reference_date || '-';
-  renderRows('companyBox', data.kpis?.company_cumulative || [], 'name', 'count');
+  const setDashboardError = (msg) => {
+    document.getElementById('kpiRem').textContent = '0';
+    document.getElementById('kpiFol').textContent = '0';
+    document.getElementById('kpiDate').textContent = '-';
+    renderRows('companyBox', [], 'name', 'count');
+    const aiEl = document.getElementById('aiSummary');
+    if(aiEl) aiEl.innerHTML = `<div class="empty">${msg || 'Erreur de chargement du tableau de bord.'}</div>`;
+  };
 
-  syncZoomLabel();
-  renderDashboardView(data);
+  try {
+    const url = `/api/home_meeting_dashboard?meeting_id=${encodeURIComponent(meeting)}&project=${encodeURIComponent(project)}&area=${encodeURIComponent(area)}&package=${encodeURIComponent(pack)}&status_filter=${encodeURIComponent(status)}`;
+    const res = await fetch(url);
+    if(!res.ok){
+      const txt = await res.text();
+      console.error('Dashboard fetch failed', res.status, txt);
+      setDashboardError(`Impossible de charger le tableau de bord (HTTP ${res.status}).`);
+      return;
+    }
+    const data = await res.json();
+    if(data.error){
+      console.error(data.error);
+      setDashboardError(String(data.error));
+      return;
+    }
+    window.__homeDashboardData = data;
+    syncCrAvailability();
 
-  fillSelect('filterArea', data.filters?.areas || [], area, 'Toutes les zones');
-  fillSelect('filterPackage', data.filters?.packages || [], pack, 'Tous les lots');
+    document.getElementById('kpiRem').textContent = data.kpis?.open_reminders ?? 0;
+    document.getElementById('kpiFol').textContent = data.kpis?.open_followups ?? 0;
+    document.getElementById('kpiDate').textContent = data.reference_date || '-';
+    renderRows('companyBox', data.kpis?.company_cumulative || [], 'name', 'count');
 
-  const snap = data.summary_snapshot || {};
-  const aiEl = document.getElementById('aiSummary');
-  const perims = snap.by_perimeter || [];
-  const openByCompany = snap.company_open_reminders || [];
-  const closedByCompany = snap.company_closed_reminders || [];
-  aiEl.innerHTML = `
-    <div><strong>Mini synthèse :</strong> ${snap.open_subjects_total ?? 0} sujet(s) ouvert(s), dont ${snap.reminder_total ?? 0} en rappel.</div>
-    ${perims.length ? `<div style="margin-top:8px">${perims.map(p => `<div class="row" style="align-items:flex-start"><div><strong>${p.perimeter}</strong><div class="small">${p.open_subjects} ouverts • ${p.reminders} rappels</div>${(p.reminder_subjects||[]).length ? `<div class="small">Rappels: ${(p.reminder_subjects||[]).join(' • ')}</div>` : ''}</div></div>`).join('')}</div>` : '<div class="empty" style="margin-top:8px">Aucun sujet ouvert selon les filtres.</div>'}
-    <div style="margin-top:10px"><strong>Rappels ouverts (entreprises)</strong></div>
-    <div>${openByCompany.length ? openByCompany.map(c => `<div class="row"><div class="rowMain">${(/^https?:\/\//i.test(c.logo||'')) ? `<img class="coMini" src="${c.logo}" alt="" loading="lazy"/>` : ''}<span>${c.name||'—'}</span></div><strong>${c.count||0}</strong></div>`).join('') : '<div class="empty">Aucune donnée.</div>'}</div>
-    <div style="margin-top:10px"><strong>Rappels fermés (entreprises)</strong></div>
-    <div>${closedByCompany.length ? closedByCompany.map(c => `<div class="row"><div class="rowMain">${(/^https?:\/\//i.test(c.logo||'')) ? `<img class="coMini" src="${c.logo}" alt="" loading="lazy"/>` : ''}<span>${c.name||'—'}</span></div><strong>${c.count||0}</strong></div>`).join('') : '<div class="empty">Aucune donnée.</div>'}</div>
-  `;
+    syncZoomLabel();
+    renderDashboardView(data);
+
+    fillSelect('filterArea', data.filters?.areas || [], area, 'Toutes les zones');
+    fillSelect('filterPackage', data.filters?.packages || [], pack, 'Tous les lots');
+
+    const snap = data.summary_snapshot || {};
+    const aiEl = document.getElementById('aiSummary');
+    const perims = snap.by_perimeter || [];
+    const openByCompany = snap.company_open_reminders || [];
+    const closedByCompany = snap.company_closed_reminders || [];
+    if(aiEl){
+      aiEl.innerHTML = `
+        <div><strong>Mini synthèse :</strong> ${snap.open_subjects_total ?? 0} sujet(s) ouvert(s), dont ${snap.reminder_total ?? 0} en rappel.</div>
+        ${perims.length ? `<div style="margin-top:8px">${perims.map(p => `<div class="row" style="align-items:flex-start"><div><strong>${p.perimeter}</strong><div class="small">${p.open_subjects} ouverts • ${p.reminders} rappels</div>${(p.reminder_subjects||[]).length ? `<div class="small">Rappels: ${(p.reminder_subjects||[]).join(' • ')}</div>` : ''}</div></div>`).join('')}</div>` : '<div class="empty" style="margin-top:8px">Aucun sujet ouvert selon les filtres.</div>'}
+        <div style="margin-top:10px"><strong>Rappels ouverts (entreprises)</strong></div>
+        <div>${openByCompany.length ? openByCompany.map(c => `<div class="row"><div class="rowMain">${(/^https?:\/\//i.test(c.logo||'')) ? `<img class="coMini" src="${c.logo}" alt="" loading="lazy"/>` : ''}<span>${c.name||'—'}</span></div><strong>${c.count||0}</strong></div>`).join('') : '<div class="empty">Aucune donnée.</div>'}</div>
+        <div style="margin-top:10px"><strong>Rappels fermés (entreprises)</strong></div>
+        <div>${closedByCompany.length ? closedByCompany.map(c => `<div class="row"><div class="rowMain">${(/^https?:\/\//i.test(c.logo||'')) ? `<img class="coMini" src="${c.logo}" alt="" loading="lazy"/>` : ''}<span>${c.name||'—'}</span></div><strong>${c.count||0}</strong></div>`).join('') : '<div class="empty">Aucune donnée.</div>'}</div>
+      `;
+    }
+  } catch (err) {
+    console.error('Dashboard refresh exception', err);
+    setDashboardError("Impossible de charger le tableau de bord (erreur JavaScript).");
+  }
 }
 
 window.addEventListener('DOMContentLoaded', () => {
