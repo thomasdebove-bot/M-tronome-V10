@@ -4408,6 +4408,8 @@ def render_cr(
             g_view = g.copy().sort_values(by=E_COL_CREATED, na_position="last")
             for idx, r in g_view.iterrows():
                 rid = _entry_id_value(r)
+                if rid and rid in seen_entry_ids:
+                    continue
                 tag = "Tâche" if _bool_true(r.get(E_COL_IS_TASK)) else "Mémo"
                 is_meeting_entry = str(r.get(E_COL_MEETING_ID, "")).strip() == str(meeting_id)
                 row_html = render_task_row_tr(
