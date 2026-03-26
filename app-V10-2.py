@@ -3951,9 +3951,20 @@ def render_cr(
                     | ((edf2["__done__"].isna()) & (edf2["__created__"].notna()) & (edf2["__created__"] <= range_end_date))
                 ].copy()
         else:
+            # Sans période explicite: afficher uniquement les tâches clôturées récemment (14 jours).
+            recent_cutoff = ref_date - timedelta(days=14)
             edf2 = edf2.loc[
-                ((edf2["__done__"].notna()) & (edf2["__done__"] <= ref_date))
-                | ((edf2["__done__"].isna()) & ((edf2["__created__"].isna()) | (edf2["__created__"] <= ref_date)))
+                (
+                    (edf2["__done__"].notna())
+                    & (edf2["__done__"] <= ref_date)
+                    & (edf2["__done__"] >= recent_cutoff)
+                )
+                | (
+                    (edf2["__done__"].isna())
+                    & (edf2["__created__"].notna())
+                    & (edf2["__created__"] <= ref_date)
+                    & (edf2["__created__"] >= recent_cutoff)
+                )
             ].copy()
         edf2["__reminder__"] = [
             reminder_level_at_done(dline, ddone)
