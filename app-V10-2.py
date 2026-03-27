@@ -847,6 +847,7 @@ def build_company_email_html(
     meeting_date: date,
     app_url: str = "https://app.atelier-tempo.fr",
     show_created_date: bool = True,
+    reference_date: Optional[date] = None,
     include_company_kpi: bool = False,
     company_kpi_rows: Optional[List[dict]] = None,
 ) -> tuple[str, str]:
@@ -859,6 +860,7 @@ def build_company_email_html(
     meeting_txt = _fmt_mail_date(meeting_date)
     ref_txt = _fmt_mail_date(date.today())
     subject = f"CR Synthèse - {project_name} - Réunion du {meeting_txt}"
+    calc_ref_date = reference_date or date.today()
 
     def _rank(it: dict) -> int:
         tp = str(it.get("type") or "").lower()
@@ -968,7 +970,7 @@ def build_company_email_html(
                 fait_le = str(it.get("done_label") or "").strip() or ("/" if str(it.get("type") or "") == "memo" else "")
 
             if str(it.get("type") or "") == "open" and isinstance(due_date, date):
-                delta = (due_date - meeting_date).days
+                delta = (due_date - calc_ref_date).days
                 if 0 <= delta <= 10:
                     fait_le = f'<span style="color:#15803d;font-weight:700">J-{delta}</span>'
 
@@ -3443,37 +3445,64 @@ async function refreshDashboard(){
   const status = document.getElementById('filterStatus')?.value || 'open';
   const hasMeeting = !!meeting;
   if(!hasMeeting && !project) return;
-  const url = `/api/home_meeting_dashboard?meeting_id=${encodeURIComponent(meeting)}&project=${encodeURIComponent(project)}&area=${encodeURIComponent(area)}&package=${encodeURIComponent(pack)}&status_filter=${encodeURIComponent(status)}`;
-  const res = await fetch(url);
-  const data = await res.json();
-  if(data.error){ console.error(data.error); return; }
-  window.__homeDashboardData = data;
-  syncCrAvailability();
 
-  document.getElementById('kpiRem').textContent = data.kpis?.open_reminders ?? 0;
-  document.getElementById('kpiFol').textContent = data.kpis?.open_followups ?? 0;
-  document.getElementById('kpiDate').textContent = data.reference_date || '-';
-  renderRows('companyBox', data.kpis?.company_cumulative || [], 'name', 'count');
+  const setDashboardError = (msg) => {
+    document.getElementById('kpiRem').textContent = '0';
+    document.getElementById('kpiFol').textContent = '0';
+    document.getElementById('kpiDate').textContent = '-';
+    renderRows('companyBox', [], 'name', 'count');
+    const aiEl = document.getElementById('aiSummary');
+    if(aiEl) aiEl.innerHTML = `<div class="empty">${msg || 'Erreur de chargement du tableau de bord.'}</div>`;
+  };
 
-  syncZoomLabel();
-  renderDashboardView(data);
+  try {
+    const url = `/api/home_meeting_dashboard?meeting_id=${encodeURIComponent(meeting)}&project=${encodeURIComponent(project)}&area=${encodeURIComponent(area)}&package=${encodeURIComponent(pack)}&status_filter=${encodeURIComponent(status)}`;
+    const res = await fetch(url);
+    if(!res.ok){
+      const txt = await res.text();
+      console.error('Dashboard fetch failed', res.status, txt);
+      setDashboardError(`Impossible de charger le tableau de bord (HTTP ${res.status}).`);
+      return;
+    }
+    const data = await res.json();
+    if(data.error){
+      console.error(data.error);
+      setDashboardError(String(data.error));
+      return;
+    }
+    window.__homeDashboardData = data;
+    syncCrAvailability();
 
-  fillSelect('filterArea', data.filters?.areas || [], area, 'Toutes les zones');
-  fillSelect('filterPackage', data.filters?.packages || [], pack, 'Tous les lots');
+    document.getElementById('kpiRem').textContent = data.kpis?.open_reminders ?? 0;
+    document.getElementById('kpiFol').textContent = data.kpis?.open_followups ?? 0;
+    document.getElementById('kpiDate').textContent = data.reference_date || '-';
+    renderRows('companyBox', data.kpis?.company_cumulative || [], 'name', 'count');
 
-  const snap = data.summary_snapshot || {};
-  const aiEl = document.getElementById('aiSummary');
-  const perims = snap.by_perimeter || [];
-  const openByCompany = snap.company_open_reminders || [];
-  const closedByCompany = snap.company_closed_reminders || [];
-  aiEl.innerHTML = `
-    <div><strong>Mini synthèse :</strong> ${snap.open_subjects_total ?? 0} sujet(s) ouvert(s), dont ${snap.reminder_total ?? 0} en rappel.</div>
-    ${perims.length ? `<div style="margin-top:8px">${perims.map(p => `<div class="row" style="align-items:flex-start"><div><strong>${p.perimeter}</strong><div class="small">${p.open_subjects} ouverts • ${p.reminders} rappels</div>${(p.reminder_subjects||[]).length ? `<div class="small">Rappels: ${(p.reminder_subjects||[]).join(' • ')}</div>` : ''}</div></div>`).join('')}</div>` : '<div class="empty" style="margin-top:8px">Aucun sujet ouvert selon les filtres.</div>'}
-    <div style="margin-top:10px"><strong>Rappels ouverts (entreprises)</strong></div>
-    <div>${openByCompany.length ? openByCompany.map(c => `<div class="row"><div class="rowMain">${(/^https?:\/\//i.test(c.logo||'')) ? `<img class="coMini" src="${c.logo}" alt="" loading="lazy"/>` : ''}<span>${c.name||'—'}</span></div><strong>${c.count||0}</strong></div>`).join('') : '<div class="empty">Aucune donnée.</div>'}</div>
-    <div style="margin-top:10px"><strong>Rappels fermés (entreprises)</strong></div>
-    <div>${closedByCompany.length ? closedByCompany.map(c => `<div class="row"><div class="rowMain">${(/^https?:\/\//i.test(c.logo||'')) ? `<img class="coMini" src="${c.logo}" alt="" loading="lazy"/>` : ''}<span>${c.name||'—'}</span></div><strong>${c.count||0}</strong></div>`).join('') : '<div class="empty">Aucune donnée.</div>'}</div>
-  `;
+    syncZoomLabel();
+    renderDashboardView(data);
+
+    fillSelect('filterArea', data.filters?.areas || [], area, 'Toutes les zones');
+    fillSelect('filterPackage', data.filters?.packages || [], pack, 'Tous les lots');
+
+    const snap = data.summary_snapshot || {};
+    const aiEl = document.getElementById('aiSummary');
+    const perims = snap.by_perimeter || [];
+    const openByCompany = snap.company_open_reminders || [];
+    const closedByCompany = snap.company_closed_reminders || [];
+    if(aiEl){
+      aiEl.innerHTML = `
+        <div><strong>Mini synthèse :</strong> ${snap.open_subjects_total ?? 0} sujet(s) ouvert(s), dont ${snap.reminder_total ?? 0} en rappel.</div>
+        ${perims.length ? `<div style="margin-top:8px">${perims.map(p => `<div class="row" style="align-items:flex-start"><div><strong>${p.perimeter}</strong><div class="small">${p.open_subjects} ouverts • ${p.reminders} rappels</div>${(p.reminder_subjects||[]).length ? `<div class="small">Rappels: ${(p.reminder_subjects||[]).join(' • ')}</div>` : ''}</div></div>`).join('')}</div>` : '<div class="empty" style="margin-top:8px">Aucun sujet ouvert selon les filtres.</div>'}
+        <div style="margin-top:10px"><strong>Rappels ouverts (entreprises)</strong></div>
+        <div>${openByCompany.length ? openByCompany.map(c => `<div class="row"><div class="rowMain">${(/^https?:\/\//i.test(c.logo||'')) ? `<img class="coMini" src="${c.logo}" alt="" loading="lazy"/>` : ''}<span>${c.name||'—'}</span></div><strong>${c.count||0}</strong></div>`).join('') : '<div class="empty">Aucune donnée.</div>'}</div>
+        <div style="margin-top:10px"><strong>Rappels fermés (entreprises)</strong></div>
+        <div>${closedByCompany.length ? closedByCompany.map(c => `<div class="row"><div class="rowMain">${(/^https?:\/\//i.test(c.logo||'')) ? `<img class="coMini" src="${c.logo}" alt="" loading="lazy"/>` : ''}<span>${c.name||'—'}</span></div><strong>${c.count||0}</strong></div>`).join('') : '<div class="empty">Aucune donnée.</div>'}</div>
+      `;
+    }
+  } catch (err) {
+    console.error('Dashboard refresh exception', err);
+    setDashboardError("Impossible de charger le tableau de bord (erreur JavaScript).");
+  }
 }
 
 window.addEventListener('DOMContentLoaded', () => {
@@ -3882,7 +3911,7 @@ def render_cr(
     rem_df = reminders_for_project(
         project_title=project,
         ref_date=range_ref_date,
-        max_level=8,
+        max_level=999,
         start_date=range_start_date,
         end_date=range_end_date,
     )
@@ -3901,17 +3930,42 @@ def render_cr(
     ].copy()
     if not project_history.empty:
         edf2 = project_history.copy()
-        helper_cols = ["__is_task__", "__completed__", "__deadline__", "__done__", "__reminder__"]
+        helper_cols = ["__is_task__", "__completed__", "__deadline__", "__done__", "__created__", "__reminder__"]
         edf2 = edf2.drop(columns=[c for c in helper_cols if c in edf2.columns], errors="ignore")
         edf2["__is_task__"] = _series(edf2, E_COL_IS_TASK, False).apply(_bool_true)
         edf2["__completed__"] = _series(edf2, E_COL_COMPLETED, False).apply(_bool_true)
         edf2["__deadline__"] = _series(edf2, E_COL_DEADLINE, None).apply(_parse_date_any)
         edf2["__done__"] = _series(edf2, E_COL_COMPLETED_END, None).apply(_parse_date_any)
+        edf2["__created__"] = _series(edf2, E_COL_CREATED, None).apply(_parse_date_any)
         edf2.loc[edf2["__done__"].notna(), "__completed__"] = True
         edf2 = edf2.loc[(edf2["__is_task__"] == True) & (edf2["__completed__"] == True)].copy()
-        edf2 = edf2.loc[edf2["__done__"].notna()].copy()
-        days_since_done = pd.to_datetime(ref_date) - pd.to_datetime(edf2["__done__"])
-        edf2 = edf2.loc[(days_since_done.dt.days >= 0) & (days_since_done.dt.days <= 14)].copy()
+        if range_active:
+            if range_start_date is not None:
+                edf2 = edf2.loc[
+                    ((edf2["__done__"].notna()) & (edf2["__done__"] >= range_start_date))
+                    | ((edf2["__done__"].isna()) & (edf2["__created__"].notna()) & (edf2["__created__"] >= range_start_date))
+                ].copy()
+            if range_end_date is not None:
+                edf2 = edf2.loc[
+                    ((edf2["__done__"].notna()) & (edf2["__done__"] <= range_end_date))
+                    | ((edf2["__done__"].isna()) & (edf2["__created__"].notna()) & (edf2["__created__"] <= range_end_date))
+                ].copy()
+        else:
+            # Sans période explicite: afficher uniquement les tâches clôturées récemment (14 jours).
+            recent_cutoff = ref_date - timedelta(days=14)
+            edf2 = edf2.loc[
+                (
+                    (edf2["__done__"].notna())
+                    & (edf2["__done__"] <= ref_date)
+                    & (edf2["__done__"] >= recent_cutoff)
+                )
+                | (
+                    (edf2["__done__"].isna())
+                    & (edf2["__created__"].notna())
+                    & (edf2["__created__"] <= ref_date)
+                    & (edf2["__created__"] >= recent_cutoff)
+                )
+            ].copy()
         edf2["__reminder__"] = [
             reminder_level_at_done(dline, ddone)
             for dline, ddone in zip(edf2["__deadline__"].tolist(), edf2["__done__"].tolist())
@@ -4354,6 +4408,8 @@ def render_cr(
             g_view = g.copy().sort_values(by=E_COL_CREATED, na_position="last")
             for idx, r in g_view.iterrows():
                 rid = _entry_id_value(r)
+                if rid and rid in seen_entry_ids:
+                    continue
                 tag = "Tâche" if _bool_true(r.get(E_COL_IS_TASK)) else "Mémo"
                 is_meeting_entry = str(r.get(E_COL_MEETING_ID, "")).strip() == str(meeting_id)
                 row_html = render_task_row_tr(
@@ -5312,6 +5368,8 @@ def api_home_meeting_dashboard(
         entries = entries.loc[entries["__deadline__"].notna()].copy()
         entries = _explode_areas(entries)
         entries = _explode_packages(entries)
+        entries["__company__"] = _series(entries, E_COL_COMPANY_TASK, "").fillna("").astype(str).str.strip()
+        entries["__company__"] = entries["__company__"].replace("", "Non renseigné")
 
         if area:
             entries = entries.loc[entries["__area_list__"].astype(str) == area].copy()
@@ -5341,8 +5399,6 @@ def api_home_meeting_dashboard(
                     & (entries["__deadline__"] < ref_date)
                 ].copy()
 
-            entries["__company__"] = _series(entries, E_COL_COMPANY_TASK, "").fillna("").astype(str).str.strip()
-            entries["__company__"] = entries["__company__"].replace("", "Non renseigné")
             entries["__start__"] = _series(entries, E_COL_CREATED, None).apply(_parse_date_any)
             entries["__start__"] = entries.apply(
                 lambda r: r["__start__"] if r["__start__"] is not None else r["__deadline__"] - timedelta(days=7), axis=1
@@ -5613,6 +5669,7 @@ def api_meeting_company_mail_draft(
         else:
             project = (project or "").strip()
             meeting_date = date.today()
+        today_ref = date.today()
         p_start = _parse_date_any(period_start) if str(period_start or "").strip() else None
         p_end = _parse_date_any(period_end) if str(period_end or "").strip() else None
         if p_start and p_end and p_start > p_end:
@@ -5747,18 +5804,19 @@ def api_meeting_company_mail_draft(
             # Fenêtre par défaut (si aucune période saisie):
             # - entrées disponibles à la date de réunion (open/memos)
             # - rappels
-            # - sujets "fait-le" dans les 2 semaines avant la réunion
+            # - tâches clôturées jusqu'à la date de réunion
             if str(meeting_id or "").strip() and (not p_start and not p_end):
                 if is_task and is_completed:
-                    if not isinstance(done_date, date):
-                        continue
-                    if not (meeting_date - timedelta(days=14) <= done_date <= meeting_date):
+                    if isinstance(done_date, date):
+                        if done_date > meeting_date:
+                            continue
+                    elif isinstance(created_date, date) and created_date > meeting_date:
                         continue
                 else:
                     if isinstance(created_date, date) and created_date > meeting_date:
                         continue
 
-            is_reminder = bool(is_task and (not is_completed) and isinstance(due_date, date) and due_date < meeting_date)
+            is_reminder = bool(is_task and (not is_completed) and isinstance(due_date, date) and due_date < today_ref)
             if is_task and is_completed and not include_closed:
                 continue
             if is_reminder and not include_reminders:
@@ -5766,9 +5824,9 @@ def api_meeting_company_mail_draft(
             if is_task and (not is_completed) and (not is_reminder) and not include_tasks:
                 continue
 
-            if is_task and not is_completed and isinstance(due_date, date) and due_date < meeting_date:
+            if is_task and not is_completed and isinstance(due_date, date) and due_date < today_ref:
                 itype = "reminder"
-                rem_lvl = int(reminder_level(due_date, False, meeting_date) or 1)
+                rem_lvl = int(reminder_level(due_date, False, today_ref) or 1)
                 done_label = f"RAPPEL {rem_lvl}"
             elif is_task and not is_completed:
                 itype = "open"
@@ -5843,6 +5901,7 @@ def api_meeting_company_mail_draft(
             meeting_date=meeting_date,
             app_url="https://app.atelier-tempo.fr",
             show_created_date=bool(str(meeting_id or "").strip()),
+            reference_date=today_ref,
             include_company_kpi=include_company_kpi,
             company_kpi_rows=company_kpi_rows,
         )
