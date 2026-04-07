@@ -616,7 +616,7 @@ def _comments_by_entry_id() -> Dict[str, List[str]]:
     global _comments_index_cache
     m = _mtime(COMMENTS_PATH)
     old_m, idx = _comments_index_cache
-    if old_m == m and idx:
+    if old_m == m:
         return idx
 
     cdf = get_comments().copy()
@@ -666,7 +666,7 @@ def _comments_by_entry_title() -> Dict[str, List[str]]:
     global _comments_title_index_cache
     m = _mtime(COMMENTS_PATH)
     old_m, idx = _comments_title_index_cache
-    if old_m == m and idx:
+    if old_m == m:
         return idx
 
     cdf = get_comments().copy()
