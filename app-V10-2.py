@@ -594,18 +594,45 @@ def _clean_mail_comment_value(v) -> str:
     txt = str(v or "").strip()
     if not txt:
         return ""
-    if txt.lower() in {"nan", "none", "null", "na", "n/a", "-"}:
+    low = txt.lower()
+    if low in {"nan", "none", "null", "na", "n/a", "-", "tâche", "tache", "mémo", "memo", "task"}:
         return ""
+    if txt.startswith("{") or txt.startswith("["):
+        try:
+            payload = json.loads(txt)
+        except Exception:
+            payload = None
+        if payload is not None:
+            extracted: List[str] = []
+
+            def _walk(obj):
+                if isinstance(obj, dict):
+                    for k, vv in obj.items():
+                        kk = str(k or "").lower()
+                        if kk in {"text", "comment", "message", "body", "content"}:
+                            sv = _clean_mail_comment_value(vv)
+                            if sv:
+                                extracted.append(sv)
+                        else:
+                            _walk(vv)
+                elif isinstance(obj, list):
+                    for it in obj:
+                        _walk(it)
+
+            _walk(payload)
+            if extracted:
+                return " | ".join(dict.fromkeys(extracted))
     return txt
 
 
 def _mail_comment_from_row(r: pd.Series) -> str:
     preferred_cols = [E_COL_TASK_COMMENT_FULL, E_COL_TASK_COMMENT_TEXT]
+    candidates: List[str] = []
     for col in preferred_cols:
         if col in r.index:
             txt = _clean_mail_comment_value(r.get(col))
             if txt:
-                return txt
+                candidates.append(txt)
 
     for col in r.index.tolist():
         key = str(col or "").strip().lower()
@@ -613,12 +640,15 @@ def _mail_comment_from_row(r: pd.Series) -> str:
             continue
         if ("comment" not in key) and ("commentaire" not in key):
             continue
-        if ("editor" in key) or ("author" in key) or ("date" in key):
+        if ("editor" in key) or ("author" in key) or ("date" in key) or ("type" in key):
             continue
         txt = _clean_mail_comment_value(r.get(col))
         if txt:
-            return txt
-    return ""
+            candidates.append(txt)
+    if not candidates:
+        return ""
+    candidates = sorted(set(candidates), key=lambda x: len(x), reverse=True)
+    return candidates[0]
 
 
 # -------------------------
