@@ -146,6 +146,7 @@ _cache = {
     "companies": (None, None),
     "projects": (None, None),
     "documents": (None, None),
+    "comments": (None, None),
     "users": (None, None),
 }
 
@@ -221,6 +222,19 @@ def get_documents() -> pd.DataFrame:
         _require_csv(DOCUMENTS_PATH, "Documents", "METRONOME_DOCUMENTS")
         df = _load_csv(DOCUMENTS_PATH)
         _cache["documents"] = (m, df)
+    return df
+
+
+def get_comments() -> pd.DataFrame:
+    m = _mtime(COMMENTS_PATH)
+    old_m, df = _cache["comments"]
+    if df is None or m != old_m:
+        if not os.path.exists(COMMENTS_PATH):
+            df = pd.DataFrame()
+            _cache["comments"] = (m, df)
+            return df
+        df = _load_csv(COMMENTS_PATH)
+        _cache["comments"] = (m, df)
     return df
 
 
@@ -557,6 +571,8 @@ def render_task_comment(r) -> str:
     if txt is None or (isinstance(txt, float) and pd.isna(txt)) or str(txt).strip() == "":
         txt = r.get(E_COL_TASK_COMMENT_TEXT)
     if txt is None or (isinstance(txt, float) and pd.isna(txt)) or str(txt).strip() == "":
+        txt = _comments_text_for_entry_id(r.get(E_COL_ID, ""))
+    if txt is None or (isinstance(txt, float) and pd.isna(txt)) or str(txt).strip() == "":
         return ""
     author = _escape(r.get(E_COL_TASK_COMMENT_AUTHOR, ""))
     d = _fmt_date(_parse_date_any(r.get(E_COL_TASK_COMMENT_DATE)))
@@ -576,6 +592,8 @@ def render_entry_comment(r) -> str:
     if txt is None or (isinstance(txt, float) and pd.isna(txt)) or str(txt).strip() == "":
         txt = r.get(E_COL_TASK_COMMENT_TEXT)
     if txt is None or (isinstance(txt, float) and pd.isna(txt)) or str(txt).strip() == "":
+        txt = _comments_text_for_entry_id(r.get(E_COL_ID, ""))
+    if txt is None or (isinstance(txt, float) and pd.isna(txt)) or str(txt).strip() == "":
         return ""
     author = _escape(r.get(E_COL_TASK_COMMENT_AUTHOR, ""))
     d = _fmt_date(_parse_date_any(r.get(E_COL_TASK_COMMENT_DATE)))
@@ -588,6 +606,69 @@ def render_entry_comment(r) -> str:
         <div class="commentEditable" style="margin-top:6px">{body}</div>
       </div>
     """
+
+
+_comments_index_cache: Tuple[float, Dict[str, List[str]]] = (-2.0, {})
+
+
+def _comments_by_entry_id() -> Dict[str, List[str]]:
+    global _comments_index_cache
+    m = _mtime(COMMENTS_PATH)
+    old_m, idx = _comments_index_cache
+    if old_m == m and idx:
+        return idx
+
+    cdf = get_comments().copy()
+    if cdf.empty:
+        _comments_index_cache = (m, {})
+        return {}
+
+    entry_col = "Entry/ID" if "Entry/ID" in cdf.columns else None
+    if not entry_col:
+        for col in cdf.columns:
+            key = str(col or "").strip().lower()
+            if "entry/id" in key or ("entry" in key and "id" in key):
+                entry_col = col
+                break
+    content_col = "Content" if "Content" in cdf.columns else None
+    if not content_col:
+        for col in cdf.columns:
+            key = str(col or "").strip().lower()
+            if "content" in key or "comment" in key:
+                content_col = col
+                break
+
+    if not entry_col or not content_col:
+        _comments_index_cache = (m, {})
+        return {}
+
+    cdf["__entry_id__"] = cdf[entry_col].fillna("").astype(str).str.strip()
+    cdf["__content__"] = cdf[content_col].fillna("").astype(str).str.strip()
+    cdf = cdf.loc[(cdf["__entry_id__"] != "") & (cdf["__content__"] != "")].copy()
+
+    out: Dict[str, List[str]] = {}
+    for _, row in cdf.iterrows():
+        eid = str(row.get("__entry_id__", "")).strip()
+        txt = _clean_mail_comment_value(row.get("__content__", ""))
+        if not eid or not txt:
+            continue
+        out.setdefault(eid, []).append(txt)
+
+    for eid in list(out.keys()):
+        out[eid] = list(dict.fromkeys(out[eid]))
+
+    _comments_index_cache = (m, out)
+    return out
+
+
+def _comments_text_for_entry_id(entry_id: str) -> str:
+    eid = str(entry_id or "").strip()
+    if not eid:
+        return ""
+    vals = _comments_by_entry_id().get(eid, [])
+    if not vals:
+        return ""
+    return "\n".join(vals)
 
 
 def _clean_mail_comment_value(v) -> str:
@@ -650,7 +731,8 @@ def _mail_comment_from_row(r: pd.Series) -> str:
         if txt:
             candidates.append(txt)
     if not candidates:
-        return ""
+        fallback = _comments_text_for_entry_id(r.get(E_COL_ID, ""))
+        return _clean_mail_comment_value(fallback)
     candidates = sorted(set(candidates), key=lambda x: len(x), reverse=True)
     return candidates[0]
 
