@@ -5871,7 +5871,7 @@ def api_meeting_company_mail_draft(
             items_all.append({
                 "type": itype,
                 "subject": str(r.get(E_COL_TITLE, "") or "").strip() or "(sans titre)",
-                "comment": str(r.get(E_COL_TASK_COMMENT_TEXT, "") or "").strip(),
+                "comment": str((r.get(E_COL_TASK_COMMENT_FULL) or r.get(E_COL_TASK_COMMENT_TEXT) or "")).strip(),
                 "created_date": created_date,
                 "due_date": due_date,
                 "done_date": done_date,
