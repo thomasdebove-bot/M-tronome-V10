@@ -3648,13 +3648,33 @@ async function generateCompanyMailDraft(){
   const incWithoutCreated = document.getElementById('mailIncludeWithoutCreated')?.checked ? '1' : '0';
   const incCompanyKpi = document.getElementById('mailIncludeCompanyKpi')?.checked ? '1' : '0';
   const url = `/api/meeting_company_mail_draft?meeting_id=${encodeURIComponent(meeting)}&project=${encodeURIComponent(project)}&selected_companies=${encodeURIComponent(companies.join(','))}&all_companies=${allCompanies}&period_start=${encodeURIComponent(pStart)}&period_end=${encodeURIComponent(pEnd)}&include_tasks=${incTasks}&include_memos=${incMemos}&include_reminders=${incRem}&include_closed=${incClosed}&include_without_created=${incWithoutCreated}&include_company_kpi=${incCompanyKpi}`;
-  const res = await fetch(url);
-  const data = await res.json();
-  if(data.error){ alert(data.error); return; }
   const body = document.getElementById('mailBody');
   const preview = document.getElementById('mailPreview');
-  if(body) body.value = data.html || '';
-  if(preview) preview.srcdoc = data.html || '';
+  try{
+    const res = await fetch(url);
+    if(!res.ok){
+      const txt = await res.text();
+      const fallback = `<div style="padding:12px;font-family:Arial,sans-serif;color:#b91c1c"><strong>Erreur de génération mail</strong><div style="margin-top:8px;font-size:12px;white-space:pre-wrap">${escHtml(txt || `HTTP ${res.status}`)}</div></div>`;
+      if(body) body.value = '';
+      if(preview) preview.srcdoc = fallback;
+      return;
+    }
+    const data = await res.json();
+    if(data.error){
+      const fallback = `<div style="padding:12px;font-family:Arial,sans-serif;color:#b91c1c"><strong>Erreur de génération mail</strong><div style="margin-top:8px;font-size:12px">${escHtml(String(data.error || 'Erreur inconnue'))}</div></div>`;
+      if(body) body.value = '';
+      if(preview) preview.srcdoc = fallback;
+      return;
+    }
+    const html = data.html || (data.text_fallback ? `<div style="padding:12px;font-family:Arial,sans-serif;color:#334155">${escHtml(String(data.text_fallback))}</div>` : '');
+    if(body) body.value = html;
+    if(preview) preview.srcdoc = html;
+  }catch(err){
+    const msg = (err && err.message) ? err.message : String(err || 'Erreur inconnue');
+    const fallback = `<div style="padding:12px;font-family:Arial,sans-serif;color:#b91c1c"><strong>Erreur de génération mail</strong><div style="margin-top:8px;font-size:12px">${escHtml(msg)}</div></div>`;
+    if(body) body.value = '';
+    if(preview) preview.srcdoc = fallback;
+  }
 }
 
 async function refreshDashboard(){
@@ -5903,13 +5923,10 @@ def api_meeting_company_mail_draft(
             meeting_df = get_entries().copy()
             if project:
                 meeting_df = meeting_df.loc[_series(meeting_df, E_COL_PROJECT_TITLE, "").fillna("").astype(str).str.strip() == project].copy()
-            meeting_df = meeting_df.loc[_series(meeting_df, E_COL_MEETING_ID, "").fillna("").astype(str).str.strip() == ""].copy()
 
         all_project_df = get_entries().copy()
         if project:
             all_project_df = all_project_df.loc[_series(all_project_df, E_COL_PROJECT_TITLE, "").fillna("").astype(str).str.strip() == project].copy()
-        if not str(meeting_id or "").strip():
-            all_project_df = all_project_df.loc[_series(all_project_df, E_COL_MEETING_ID, "").fillna("").astype(str).str.strip() == ""].copy()
         if all_project_df.empty:
             return {"emails_detected": [], "subject": "", "html": "", "text_fallback": "Aucune donnée projet."}
 
