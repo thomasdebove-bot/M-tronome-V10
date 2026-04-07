@@ -571,7 +571,7 @@ def render_task_comment(r) -> str:
     if txt is None or (isinstance(txt, float) and pd.isna(txt)) or str(txt).strip() == "":
         txt = r.get(E_COL_TASK_COMMENT_TEXT)
     if txt is None or (isinstance(txt, float) and pd.isna(txt)) or str(txt).strip() == "":
-        txt = _comments_text_for_entry_id(r.get(E_COL_ID, ""))
+        txt = _comments_text_for_row(r)
     if txt is None or (isinstance(txt, float) and pd.isna(txt)) or str(txt).strip() == "":
         return ""
     author = _escape(r.get(E_COL_TASK_COMMENT_AUTHOR, ""))
@@ -592,7 +592,7 @@ def render_entry_comment(r) -> str:
     if txt is None or (isinstance(txt, float) and pd.isna(txt)) or str(txt).strip() == "":
         txt = r.get(E_COL_TASK_COMMENT_TEXT)
     if txt is None or (isinstance(txt, float) and pd.isna(txt)) or str(txt).strip() == "":
-        txt = _comments_text_for_entry_id(r.get(E_COL_ID, ""))
+        txt = _comments_text_for_row(r)
     if txt is None or (isinstance(txt, float) and pd.isna(txt)) or str(txt).strip() == "":
         return ""
     author = _escape(r.get(E_COL_TASK_COMMENT_AUTHOR, ""))
@@ -609,6 +609,7 @@ def render_entry_comment(r) -> str:
 
 
 _comments_index_cache: Tuple[float, Dict[str, List[str]]] = (-2.0, {})
+_comments_title_index_cache: Tuple[float, Dict[str, List[str]]] = (-2.0, {})
 
 
 def _comments_by_entry_id() -> Dict[str, List[str]]:
@@ -661,11 +662,73 @@ def _comments_by_entry_id() -> Dict[str, List[str]]:
     return out
 
 
+def _comments_by_entry_title() -> Dict[str, List[str]]:
+    global _comments_title_index_cache
+    m = _mtime(COMMENTS_PATH)
+    old_m, idx = _comments_title_index_cache
+    if old_m == m and idx:
+        return idx
+
+    cdf = get_comments().copy()
+    if cdf.empty:
+        _comments_title_index_cache = (m, {})
+        return {}
+
+    title_col = "Entry/Title" if "Entry/Title" in cdf.columns else None
+    if not title_col:
+        for col in cdf.columns:
+            key = str(col or "").strip().lower()
+            if "entry/title" in key or ("entry" in key and "title" in key):
+                title_col = col
+                break
+    content_col = "Content" if "Content" in cdf.columns else None
+    if not content_col:
+        for col in cdf.columns:
+            key = str(col or "").strip().lower()
+            if "content" in key or "comment" in key:
+                content_col = col
+                break
+    if not title_col or not content_col:
+        _comments_title_index_cache = (m, {})
+        return {}
+
+    cdf["__entry_title__"] = cdf[title_col].fillna("").astype(str).str.strip()
+    cdf["__content__"] = cdf[content_col].fillna("").astype(str).str.strip()
+    cdf = cdf.loc[(cdf["__entry_title__"] != "") & (cdf["__content__"] != "")].copy()
+
+    out: Dict[str, List[str]] = {}
+    for _, row in cdf.iterrows():
+        key = _norm_name(str(row.get("__entry_title__", "")).strip())
+        txt = _clean_mail_comment_value(row.get("__content__", ""))
+        if not key or not txt:
+            continue
+        out.setdefault(key, []).append(txt)
+
+    for k in list(out.keys()):
+        out[k] = list(dict.fromkeys(out[k]))
+
+    _comments_title_index_cache = (m, out)
+    return out
+
+
 def _comments_text_for_entry_id(entry_id: str) -> str:
     eid = str(entry_id or "").strip()
     if not eid:
         return ""
     vals = _comments_by_entry_id().get(eid, [])
+    if not vals:
+        return ""
+    return "\n".join(vals)
+
+
+def _comments_text_for_row(r) -> str:
+    txt = _comments_text_for_entry_id(r.get(E_COL_ID, ""))
+    if txt:
+        return txt
+    title_key = _norm_name(str(r.get(E_COL_TITLE, "") or "").strip())
+    if not title_key:
+        return ""
+    vals = _comments_by_entry_title().get(title_key, [])
     if not vals:
         return ""
     return "\n".join(vals)
@@ -733,7 +796,7 @@ def _mail_comment_from_row(r: pd.Series) -> str:
         if txt:
             candidates.append(txt)
     if not candidates:
-        fallback = _comments_text_for_entry_id(r.get(E_COL_ID, ""))
+        fallback = _comments_text_for_row(r)
         return _clean_mail_comment_value(fallback)
     candidates = sorted(set(candidates), key=lambda x: len(x), reverse=True)
     return candidates[0]
