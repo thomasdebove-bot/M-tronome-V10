@@ -590,6 +590,37 @@ def render_entry_comment(r) -> str:
     """
 
 
+def _clean_mail_comment_value(v) -> str:
+    txt = str(v or "").strip()
+    if not txt:
+        return ""
+    if txt.lower() in {"nan", "none", "null", "na", "n/a", "-"}:
+        return ""
+    return txt
+
+
+def _mail_comment_from_row(r: pd.Series) -> str:
+    preferred_cols = [E_COL_TASK_COMMENT_FULL, E_COL_TASK_COMMENT_TEXT]
+    for col in preferred_cols:
+        if col in r.index:
+            txt = _clean_mail_comment_value(r.get(col))
+            if txt:
+                return txt
+
+    for col in r.index.tolist():
+        key = str(col or "").strip().lower()
+        if not key:
+            continue
+        if ("comment" not in key) and ("commentaire" not in key):
+            continue
+        if ("editor" in key) or ("author" in key) or ("date" in key):
+            continue
+        txt = _clean_mail_comment_value(r.get(col))
+        if txt:
+            return txt
+    return ""
+
+
 # -------------------------
 # COMPANIES
 # -------------------------
@@ -5871,7 +5902,7 @@ def api_meeting_company_mail_draft(
             items_all.append({
                 "type": itype,
                 "subject": str(r.get(E_COL_TITLE, "") or "").strip() or "(sans titre)",
-                "comment": str((r.get(E_COL_TASK_COMMENT_FULL) or r.get(E_COL_TASK_COMMENT_TEXT) or "")).strip(),
+                "comment": _mail_comment_from_row(r),
                 "created_date": created_date,
                 "due_date": due_date,
                 "done_date": done_date,
