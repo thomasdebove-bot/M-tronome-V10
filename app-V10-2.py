@@ -597,6 +597,10 @@ def _clean_mail_comment_value(v) -> str:
     low = txt.lower()
     if low in {"nan", "none", "null", "na", "n/a", "-", "tâche", "tache", "mémo", "memo", "task"}:
         return ""
+    if re.match(r"^(commentaire\s*:)?\s*(tâche|tache|mémo|memo|task)\s*-\s*\d+\s*commentaires?$", low):
+        return ""
+    if re.match(r"^\d+\s*commentaires?$", low):
+        return ""
     if txt.startswith("{") or txt.startswith("["):
         try:
             payload = json.loads(txt)
