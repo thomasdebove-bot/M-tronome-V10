@@ -3616,9 +3616,14 @@ async function openCompanyMailModal(){
   const body = document.getElementById('mailBody');
   const preview = document.getElementById('mailPreview');
   if(body) body.value = '';
-  if(preview) preview.srcdoc = '';
+  if(preview) preview.srcdoc = '<div style="padding:12px;font-family:Arial,sans-serif;color:#334155">Chargement du brouillon mail…</div>';
   modal.style.display = 'flex';
-  generateCompanyMailDraft();
+  try{
+    await generateCompanyMailDraft();
+  }catch(err){
+    const msg = (err && err.message) ? err.message : String(err || 'Erreur inconnue');
+    if(preview) preview.srcdoc = `<div style="padding:12px;font-family:Arial,sans-serif;color:#b91c1c"><strong>Erreur de génération mail</strong><div style="margin-top:8px;font-size:12px">${escHtml(msg)}</div></div>`;
+  }
 }
 
 function closeCompanyMailModal(){
@@ -3666,7 +3671,9 @@ async function generateCompanyMailDraft(){
       if(preview) preview.srcdoc = fallback;
       return;
     }
-    const html = data.html || (data.text_fallback ? `<div style="padding:12px;font-family:Arial,sans-serif;color:#334155">${escHtml(String(data.text_fallback))}</div>` : '');
+    const html = data.html
+      || (data.text_fallback ? `<div style="padding:12px;font-family:Arial,sans-serif;color:#334155">${escHtml(String(data.text_fallback))}</div>` : '')
+      || '<div style="padding:12px;font-family:Arial,sans-serif;color:#334155">Aucun contenu généré pour ces filtres.</div>';
     if(body) body.value = html;
     if(preview) preview.srcdoc = html;
   }catch(err){
