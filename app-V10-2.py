@@ -669,12 +669,17 @@ def _comments_by_entry_id() -> Dict[str, List[str]]:
 
     date_col = None
     lot_col = None
+    lot_short_col = None
     for col in cdf.columns:
         key = str(col or "").strip().lower()
         if (date_col is None) and ("date/creation" in key or ("date" in key and "creation" in key)):
             date_col = col
-        if (lot_col is None) and ("entry/short name" in key or ("entry" in key and "short name" in key)):
+        if (lot_col is None) and ("entry/name" in key or ("entry" in key and key.endswith("/name")) or ("entry" in key and " name" in key)):
             lot_col = col
+        if (lot_short_col is None) and ("entry/short name" in key or ("entry" in key and "short name" in key)):
+            lot_short_col = col
+    if lot_col is None:
+        lot_col = lot_short_col
 
     cdf["__entry_id__"] = cdf[entry_col].fillna("").astype(str).str.strip()
     cdf["__content__"] = cdf[content_col].fillna("").astype(str).str.strip()
@@ -735,12 +740,17 @@ def _comments_by_entry_title() -> Dict[str, List[str]]:
 
     date_col = None
     lot_col = None
+    lot_short_col = None
     for col in cdf.columns:
         key = str(col or "").strip().lower()
         if (date_col is None) and ("date/creation" in key or ("date" in key and "creation" in key)):
             date_col = col
-        if (lot_col is None) and ("entry/short name" in key or ("entry" in key and "short name" in key)):
+        if (lot_col is None) and ("entry/name" in key or ("entry" in key and key.endswith("/name")) or ("entry" in key and " name" in key)):
             lot_col = col
+        if (lot_short_col is None) and ("entry/short name" in key or ("entry" in key and "short name" in key)):
+            lot_short_col = col
+    if lot_col is None:
+        lot_col = lot_short_col
 
     cdf["__entry_title__"] = cdf[title_col].fillna("").astype(str).str.strip()
     cdf["__content__"] = cdf[content_col].fillna("").astype(str).str.strip()
@@ -801,10 +811,22 @@ def _clean_mail_comment_value(v) -> str:
         return ""
     if re.match(r"^(commentaire\s*:)?\s*(tâche|tache|mémo|memo|task)\s*-\s*$", low):
         return ""
-    if re.match(r"^(commentaire\s*:)?\s*(tâche|tache|mémo|memo|task)\s*-\s*\d+\s*commentaires?$", low):
+    if re.match(r"^(commentaire\s*:)?\s*(tâche|tache|mémo|memo|task)\s*-\s*\d+\s*commentaires?\s*$", low):
         return ""
-    if re.match(r"^\d+\s*commentaires?$", low):
+    if re.match(r"^\d+\s*commentaires?\s*$", low):
         return ""
+    m_counter_with_text = re.match(r"^\s*\d+\s*commentaires?\s*[:\-]\s*(.+)$", txt, flags=re.I | re.S)
+    if m_counter_with_text:
+        tail = str(m_counter_with_text.group(1) or "").strip()
+        return tail
+    m_task_counter_with_text = re.match(
+        r"^\s*(commentaire\s*:)?\s*(tâche|tache|mémo|memo|task)\s*-\s*\d+\s*commentaires?\s*[:\-]\s*(.+)$",
+        txt,
+        flags=re.I | re.S,
+    )
+    if m_task_counter_with_text:
+        tail = str(m_task_counter_with_text.group(3) or "").strip()
+        return tail
     if txt.startswith("{") or txt.startswith("["):
         try:
             payload = json.loads(txt)
@@ -853,11 +875,28 @@ def _mail_comment_from_row(r: pd.Series) -> str:
         txt = _clean_mail_comment_value(r.get(col))
         if txt:
             candidates.append(txt)
+    fallback = _clean_mail_comment_value(_comments_text_for_row(r))
+    if fallback:
+        candidates.append(fallback)
     if not candidates:
-        fallback = _comments_text_for_row(r)
-        return _clean_mail_comment_value(fallback)
-    candidates = sorted(set(candidates), key=lambda x: len(x), reverse=True)
-    return candidates[0]
+        return ""
+
+    def _is_counter_only(txt: str) -> bool:
+        low = str(txt or "").strip().lower()
+        if not low:
+            return True
+        return bool(
+            re.match(r"^\d+\s*commentaires?\s*$", low)
+            or re.match(r"^(commentaire\s*:)?\s*(tâche|tache|mémo|memo|task)\s*-\s*\d+\s*commentaires?\s*$", low)
+        )
+
+    uniq = list(dict.fromkeys(candidates))
+    scored = sorted(
+        uniq,
+        key=lambda x: (-1000 if _is_counter_only(x) else 0, len(str(x or "").strip())),
+        reverse=True,
+    )
+    return scored[0]
 
 
 # -------------------------
