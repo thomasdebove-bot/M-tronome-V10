@@ -599,10 +599,19 @@ def render_entry_comment(r) -> str:
     d = _fmt_date(_parse_date_any(r.get(E_COL_TASK_COMMENT_DATE)))
     company = _escape(r.get(E_COL_COMPANY_TASK, ""))
     body = _format_entry_text_html(txt)
-    meta = " • ".join([x for x in [author, company, d] if x])
+    if d and company:
+        meta = f"Commentaire du {d} de {company}"
+    elif d:
+        meta = f"Commentaire du {d}"
+    elif company:
+        meta = f"Commentaire de {company}"
+    else:
+        meta = "Commentaire"
+    if author:
+        meta = f"{meta} ({author})"
     return f"""
       <div class="entryComment">
-        <div class="metaVal">{meta or "—"}</div>
+        <div class="metaVal">{meta}</div>
         <div class="commentEditable" style="margin-top:6px">{body}</div>
       </div>
     """
