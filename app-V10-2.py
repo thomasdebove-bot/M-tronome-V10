@@ -652,6 +652,15 @@ def _comments_by_entry_id() -> Dict[str, List[str]]:
         _comments_index_cache = (m, {})
         return {}
 
+    date_col = None
+    lot_col = None
+    for col in cdf.columns:
+        key = str(col or "").strip().lower()
+        if (date_col is None) and ("date/creation" in key or ("date" in key and "creation" in key)):
+            date_col = col
+        if (lot_col is None) and ("entry/short name" in key or ("entry" in key and "short name" in key)):
+            lot_col = col
+
     cdf["__entry_id__"] = cdf[entry_col].fillna("").astype(str).str.strip()
     cdf["__content__"] = cdf[content_col].fillna("").astype(str).str.strip()
     cdf = cdf.loc[(cdf["__entry_id__"] != "") & (cdf["__content__"] != "")].copy()
@@ -662,6 +671,14 @@ def _comments_by_entry_id() -> Dict[str, List[str]]:
         txt = _clean_mail_comment_value(row.get("__content__", ""))
         if not eid or not txt:
             continue
+        cdate = _fmt_date(_parse_date_any(row.get(date_col))) if date_col else ""
+        lot = str(row.get(lot_col, "") or "").strip() if lot_col else ""
+        if cdate and lot:
+            txt = f"Commentaire du {cdate} de {lot}\n{txt}"
+        elif cdate:
+            txt = f"Commentaire du {cdate}\n{txt}"
+        elif lot:
+            txt = f"Commentaire de {lot}\n{txt}"
         out.setdefault(eid, []).append(txt)
 
     for eid in list(out.keys()):
@@ -701,6 +718,15 @@ def _comments_by_entry_title() -> Dict[str, List[str]]:
         _comments_title_index_cache = (m, {})
         return {}
 
+    date_col = None
+    lot_col = None
+    for col in cdf.columns:
+        key = str(col or "").strip().lower()
+        if (date_col is None) and ("date/creation" in key or ("date" in key and "creation" in key)):
+            date_col = col
+        if (lot_col is None) and ("entry/short name" in key or ("entry" in key and "short name" in key)):
+            lot_col = col
+
     cdf["__entry_title__"] = cdf[title_col].fillna("").astype(str).str.strip()
     cdf["__content__"] = cdf[content_col].fillna("").astype(str).str.strip()
     cdf = cdf.loc[(cdf["__entry_title__"] != "") & (cdf["__content__"] != "")].copy()
@@ -711,6 +737,14 @@ def _comments_by_entry_title() -> Dict[str, List[str]]:
         txt = _clean_mail_comment_value(row.get("__content__", ""))
         if not key or not txt:
             continue
+        cdate = _fmt_date(_parse_date_any(row.get(date_col))) if date_col else ""
+        lot = str(row.get(lot_col, "") or "").strip() if lot_col else ""
+        if cdate and lot:
+            txt = f"Commentaire du {cdate} de {lot}\n{txt}"
+        elif cdate:
+            txt = f"Commentaire du {cdate}\n{txt}"
+        elif lot:
+            txt = f"Commentaire de {lot}\n{txt}"
         out.setdefault(key, []).append(txt)
 
     for k in list(out.keys()):
@@ -1199,9 +1233,13 @@ def build_company_email_html(
             raw_cols = set()
             sujet_cell = sujet
             if comment_txt:
+                comment_low = comment_txt.strip().lower()
+                comment_prefix = ""
+                if not (comment_low.startswith("commentaire du ") or comment_low.startswith("commentaire de ")):
+                    comment_prefix = "<b>Commentaire :</b> "
                 sujet_cell = (
                     f"{_cell_text(sujet)}"
-                    f"<div style='margin-top:4px;color:#334155;font-size:12px;line-height:1.35'><b>Commentaire :</b> {_cell_text(comment_txt)}</div>"
+                    f"<div style='margin-top:4px;color:#334155;font-size:12px;line-height:1.35'>{comment_prefix}{_cell_text(comment_txt)}</div>"
                 )
                 raw_cols.add(0)
             concerne = ", ".join([str(x).strip() for x in (it.get("concerne") or []) if str(x).strip()]) or company_name
