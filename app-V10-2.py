@@ -598,6 +598,21 @@ def render_entry_comment(r) -> str:
     author = _escape(r.get(E_COL_TASK_COMMENT_AUTHOR, ""))
     d = _fmt_date(_parse_date_any(r.get(E_COL_TASK_COMMENT_DATE)))
     company = _escape(r.get(E_COL_COMPANY_TASK, ""))
+    raw_txt = str(txt or "")
+    m_meta = re.match(r"^\s*Commentaire du (\d{2}/\d{2}/\d{2,4}) de ([^\r\n]+)\s*(?:\r?\n|$)", raw_txt, flags=re.I)
+    if m_meta:
+        if not d:
+            d = m_meta.group(1).strip()
+        if not company:
+            company = _escape(m_meta.group(2).strip())
+        raw_txt = raw_txt[m_meta.end():]
+    else:
+        m_meta_date = re.match(r"^\s*Commentaire du (\d{2}/\d{2}/\d{2,4})\s*(?:\r?\n|$)", raw_txt, flags=re.I)
+        if m_meta_date:
+            if not d:
+                d = m_meta_date.group(1).strip()
+            raw_txt = raw_txt[m_meta_date.end():]
+    txt = raw_txt.strip() or txt
     body = _format_entry_text_html(txt)
     if d and company:
         meta = f"Commentaire du {d} de {company}"
